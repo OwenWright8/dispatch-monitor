@@ -1,0 +1,29 @@
+services:
+
+  poller:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data        # persists dispatch.db and calls.json
+      - whisper-cache:/root/.cache/whisper   # cache Whisper model download
+    environment:
+      - DB_PATH=/app/data/dispatch.db
+      - CALLS_JSON=/app/data/calls.json
+      - OLLAMA_URL=http://host.docker.internal:11434/api/generate
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # lets container reach host Ollama
+
+  web:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "8086:80"
+    volumes:
+      - ./data:/usr/share/nginx/html/data:ro   # serve calls.json
+      - ./dashboard.html:/usr/share/nginx/html/dashboard.html:ro
+      - ./lib:/usr/share/nginx/html/lib:ro
+    depends_on:
+      - poller
+
+volumes:
+  whisper-cache:

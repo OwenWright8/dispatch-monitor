@@ -1,0 +1,1009 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lafayette IN · Dispatch Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
+<style>
+  :root {
+    --bg:       #0a0c0f;
+    --panel:    #111318;
+    --border:   #1e2330;
+    --accent:   #00e5ff;
+    --warn:     #ff6b35;
+    --ok:       #39d98a;
+    --muted:    #4a5568;
+    --text:     #c8d0e0;
+    --text-dim: #6b7a99;
+    --mono:     'Share Tech Mono', monospace;
+    --sans:     'Barlow Condensed', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── HEADER ─────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: .5rem 1.2rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1000;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 1.05rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .logo svg { width: 22px; height: 22px; }
+
+  .header-title {
+    font-size: .72rem;
+    font-family: var(--mono);
+    color: var(--text-dim);
+    letter-spacing: .08em;
+  }
+
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    font-family: var(--mono);
+    font-size: .68rem;
+    padding: .25rem .7rem;
+    border-radius: 20px;
+    border: 1px solid;
+  }
+
+  .status-pill.live  { border-color: var(--ok);   color: var(--ok);  }
+  .status-pill.stale { border-color: var(--warn);  color: var(--warn); }
+
+  .pulse {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%,100% { opacity: 1; }
+    50%      { opacity: .2; }
+  }
+
+  .header-spacer { flex: 1; }
+
+  .stat-group {
+    display: flex;
+    gap: 1.5rem;
+  }
+
+  .stat {
+    text-align: right;
+  }
+
+  .stat-val {
+    font-family: var(--mono);
+    font-size: 1.2rem;
+    color: var(--accent);
+    line-height: 1;
+  }
+
+  .stat-label {
+    font-size: .65rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin-top: 2px;
+  }
+
+  /* ── BODY LAYOUT ──────────────────────────── */
+  .body {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── SIDEBAR ──────────────────────────────── */
+  .sidebar {
+    width: 320px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    background: var(--panel);
+    overflow: hidden;
+  }
+
+  .sidebar-header {
+    padding: .7rem 1rem;
+    border-bottom: 1px solid var(--border);
+    font-size: .7rem;
+    font-family: var(--mono);
+    color: var(--text-dim);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  /* ── FILTERS ──────────────────────────────── */
+  .filters {
+    padding: .6rem .8rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-wrap: wrap;
+    gap: .35rem;
+  }
+
+  .filter-btn {
+    font-family: var(--mono);
+    font-size: .6rem;
+    padding: .2rem .55rem;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all .15s;
+    letter-spacing: .06em;
+  }
+
+  .filter-btn:hover, .filter-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #000;
+  }
+
+  /* ── CALL LIST ────────────────────────────── */
+  .call-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: .3rem 0;
+  }
+
+  .call-list::-webkit-scrollbar { width: 4px; }
+  .call-list::-webkit-scrollbar-track { background: transparent; }
+  .call-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .call-item {
+    padding: .55rem 1rem;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background .12s;
+    display: flex;
+    gap: .7rem;
+    align-items: flex-start;
+  }
+
+  .call-item:hover { background: rgba(255,255,255,.03); }
+  .call-item.highlighted { background: rgba(0,229,255,.06); }
+
+  .call-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-top: 5px;
+  }
+
+  .call-content { flex: 1; min-width: 0; }
+
+  .call-type {
+    font-size: .8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .call-address {
+    font-family: var(--mono);
+    font-size: .65rem;
+    color: var(--text-dim);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .call-meta {
+    font-family: var(--mono);
+    font-size: .6rem;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  .call-units {
+    font-family: var(--mono);
+    font-size: .6rem;
+    color: var(--text-dim);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .call-notes {
+    font-size: .68rem;
+    color: var(--text);
+    margin-top: 3px;
+    line-height: 1.3;
+    opacity: .8;
+  }
+
+  /* ── DETAIL MODAL ─────────────────────────── */
+  .modal-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.7);
+    z-index: 2000;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-backdrop.open { display: flex; }
+
+  .modal {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    width: 480px;
+    max-width: 92vw;
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 1.4rem 1.6rem;
+    position: relative;
+    box-shadow: 0 20px 60px rgba(0,0,0,.6);
+  }
+
+  .modal-close {
+    position: absolute;
+    top: .8rem; right: 1rem;
+    background: none; border: none;
+    color: var(--muted); font-size: 1.2rem;
+    cursor: pointer; line-height: 1;
+  }
+  .modal-close:hover { color: var(--text); }
+
+  .modal-type {
+    font-size: 1.1rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin-bottom: .15rem;
+  }
+
+  .modal-agency {
+    font-family: var(--mono);
+    font-size: .7rem;
+    color: var(--text-dim);
+    margin-bottom: 1rem;
+  }
+
+  .modal-section { margin-bottom: 1rem; }
+
+  .modal-label {
+    font-family: var(--mono);
+    font-size: .6rem;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--muted);
+    margin-bottom: .3rem;
+  }
+
+  .modal-value {
+    font-size: .85rem;
+    color: var(--text);
+    line-height: 1.5;
+  }
+
+  .unit-tag {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: .65rem;
+    padding: .15rem .5rem;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    border-radius: 3px;
+    margin: .15rem .15rem 0 0;
+  }
+
+  .modal-transcript {
+    font-family: var(--mono);
+    font-size: .68rem;
+    color: var(--text-dim);
+    background: rgba(0,0,0,.3);
+    border-left: 2px solid var(--border);
+    padding: .6rem .8rem;
+    border-radius: 0 3px 3px 0;
+    line-height: 1.6;
+    white-space: pre-wrap;
+  }
+
+  .modal-audio {
+    width: 100%;
+    margin-top: .5rem;
+    filter: invert(0.8);
+    border-radius: 4px;
+  }
+
+  /* ── MAP ──────────────────────────────────── */
+  #map {
+    flex: 1;
+    background: var(--bg);
+  }
+
+  /* ── MODE TOGGLE ──────────────────────────── */
+  .map-controls {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 500;
+    display: flex;
+    flex-direction: column;
+    gap: .4rem;
+  }
+
+  .map-btn {
+    font-family: var(--mono);
+    font-size: .65rem;
+    padding: .35rem .7rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    cursor: pointer;
+    border-radius: 3px;
+    text-align: center;
+    transition: all .15s;
+    letter-spacing: .06em;
+    white-space: nowrap;
+  }
+
+  .map-btn:hover, .map-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #000;
+  }
+
+  /* ── TIME SLIDER ──────────────────────────── */
+  .time-bar {
+    padding: .5rem 1rem;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+    display: flex;
+    align-items: center;
+    gap: .8rem;
+    flex-shrink: 0;
+  }
+
+  .time-label {
+    font-family: var(--mono);
+    font-size: .65rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+
+  input[type=range] {
+    flex: 1;
+    -webkit-appearance: none;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border);
+    outline: none;
+  }
+
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+  }
+
+  /* ── EMPTY STATE ──────────────────────────── */
+  .empty-state {
+    padding: 2rem 1rem;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: .7rem;
+    color: var(--muted);
+    line-height: 1.8;
+  }
+
+  /* ── TOOLTIP ──────────────────────────────── */
+  .leaflet-popup-content-wrapper {
+    background: var(--panel) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 4px !important;
+    box-shadow: 0 4px 24px rgba(0,0,0,.6) !important;
+    color: var(--text) !important;
+    font-family: var(--sans) !important;
+  }
+
+  .leaflet-popup-tip { background: var(--panel) !important; }
+
+  .popup-type {
+    font-weight: 700;
+    font-size: .9rem;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-bottom: .25rem;
+  }
+
+  .popup-addr {
+    font-family: var(--mono);
+    font-size: .7rem;
+    color: var(--text-dim);
+    margin-bottom: .2rem;
+  }
+
+  .popup-time {
+    font-family: var(--mono);
+    font-size: .62rem;
+    color: var(--muted);
+  }
+
+  /* ── SCAN EFFECT (new call flash) ─────────── */
+  @keyframes scanline {
+    0% { opacity: 0; transform: translateY(-100%); }
+    10% { opacity: .4; }
+    100% { opacity: 0; transform: translateY(100vh); }
+  }
+
+  .scanline {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--accent);
+    pointer-events: none;
+    animation: scanline 1.2s ease-out forwards;
+    z-index: 9999;
+  }
+</style>
+</head>
+<body>
+
+<!-- ── HEADER ───────────────────────────────────── -->
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
+      <path d="M4.9 4.9l2.1 2.1M16.9 16.9l2.1 2.1M19.1 4.9l-2.1 2.1M7.1 16.9l-2.1 2.1"/>
+    </svg>
+    Dispatch Monitor
+  </div>
+  <div class="header-title">TIPPECANOE COUNTY · LAFAYETTE IN</div>
+
+  <div id="statusPill" class="status-pill live">
+    <div class="pulse"></div>
+    <span id="statusText">LOADING</span>
+  </div>
+
+  <div class="header-spacer"></div>
+
+  <div class="stat-group">
+    <div class="stat">
+      <div class="stat-val" id="statTotal">—</div>
+      <div class="stat-label">Total Calls</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val" id="statGeocoded">—</div>
+      <div class="stat-label">Mapped</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val" id="statToday">—</div>
+      <div class="stat-label">Today</div>
+    </div>
+  </div>
+</header>
+
+<!-- ── DETAIL MODAL ────────────────────────────── -->
+<div class="modal-backdrop" id="modalBackdrop" onclick="closeModal(event)">
+  <div class="modal" id="modalBox">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <div class="modal-type" id="mType"></div>
+    <div class="modal-agency" id="mAgency"></div>
+
+    <div class="modal-section" id="mNotesSection">
+      <div class="modal-label">Incident Summary</div>
+      <div class="modal-value" id="mNotes"></div>
+    </div>
+
+    <div class="modal-section" id="mAddrSection">
+      <div class="modal-label">Address</div>
+      <div class="modal-value" id="mAddr"></div>
+    </div>
+
+    <div class="modal-section" id="mUnitsSection">
+      <div class="modal-label">Units Responding</div>
+      <div id="mUnits"></div>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-label">Radio Transcript</div>
+      <div class="modal-transcript" id="mTranscript"></div>
+    </div>
+
+    <div class="modal-section" id="mAudioSection">
+      <div class="modal-label">Audio</div>
+      <audio controls class="modal-audio" id="mAudio"></audio>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-label">Time</div>
+      <div class="modal-value" id="mTime"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── BODY ─────────────────────────────────────── -->
+<div class="body">
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <span>Recent Calls</span>
+      <span id="callCount" style="color:var(--accent)">0</span>
+    </div>
+
+    <div class="filters" id="filterBar">
+      <button class="filter-btn active" data-type="ALL">ALL</button>
+    </div>
+
+    <div class="call-list" id="callList">
+      <div class="empty-state">
+        Waiting for data...<br>
+        Run <span style="color:var(--accent)">poller.py</span> to start<br>
+        collecting dispatch audio.
+      </div>
+    </div>
+
+    <!-- Time range slider -->
+    <div class="time-bar">
+      <span class="time-label">LAST</span>
+      <input type="range" id="timeSlider" min="1" max="168" value="24" step="1">
+      <span class="time-label" id="timeLabel">24h</span>
+    </div>
+  </div>
+
+  <!-- MAP -->
+  <div style="flex:1; position:relative;">
+    <div id="map"></div>
+    <div class="map-controls">
+      <button class="map-btn active" id="btnHeat" onclick="setMode('heat')">HEATMAP</button>
+      <button class="map-btn" id="btnDots" onclick="setMode('dots')">MARKERS</button>
+      <button class="map-btn" id="btnCluster" onclick="setMode('cluster')">BY TYPE</button>
+      <button class="map-btn" id="btnStyle" onclick="toggleMapStyle()">☀ LIGHT MAP</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+// CONFIG
+// ─────────────────────────────────────────────
+const DATA_URL      = "data/calls.json";  // generated by poller.py --export-only
+const REFRESH_MS    = 30_000;        // re-fetch every 30s
+const LAFAYETTE_LL  = [40.4167, -86.8753];
+const DEMO_MODE     = true;          // set false when poller.py is running
+
+// ─────────────────────────────────────────────
+// TYPE → COLOR map
+// ─────────────────────────────────────────────
+const TYPE_COLORS = {
+  "Medical":         "#ff6b35",
+  "Fire":            "#ff2d55",
+  "Traffic Accident":"#ffd60a",
+  "Welfare Check":   "#bf5af2",
+  "Shooting":        "#ff3b30",
+  "Assault":         "#ff9f0a",
+  "Theft":           "#30b0c7",
+  "Burglary":        "#0a84ff",
+  "Drug":            "#34c759",
+  "Disturbance":     "#ac8e68",
+  "Suspicious":      "#636366",
+  "Traffic Stop":    "#48484a",
+  "Unknown":         "#3a3a3c",
+  "Other":           "#3a3a3c",
+};
+
+function typeColor(t) { return TYPE_COLORS[t] || "#3a3a3c"; }
+
+// ─────────────────────────────────────────────
+// DEMO DATA (shown when calls.json isn't ready)
+// ─────────────────────────────────────────────
+function genDemoData() {
+  const types = Object.keys(TYPE_COLORS).filter(t => t !== "Unknown" && t !== "Other");
+  const laf_addrs = [
+    "500 Main St","1200 South St","2500 Greenbush St","3200 South 18th St",
+    "1600 Union St","400 Salem St","700 N 9th St","2100 Elmwood Ave",
+    "530 Columbia St","1050 Sagamore Pkwy","900 Teal Rd","3800 Concord Rd",
+    "200 Brown St","650 Columbian Ave","1400 Schuyler Ave","2800 Old US 231",
+    "101 N 6th St","300 Ferry St","600 N Salisbury St","1800 Teal Rd"
+  ];
+  // Rough bounding box for Lafayette/West Lafayette
+  const calls = [];
+  const now = Date.now();
+  for (let i = 0; i < 80; i++) {
+    const type = types[Math.floor(Math.random() * types.length)];
+    const addr = laf_addrs[Math.floor(Math.random() * laf_addrs.length)];
+    const ageMs = Math.random() * 7 * 24 * 3600 * 1000;
+    calls.push({
+      id: `demo-${i}`,
+      timestamp: new Date(now - ageMs).toISOString(),
+      talkgroup: ["LFD DISP","LPD DISP","TIPCO EMS","WLFD DISP"][Math.floor(Math.random()*4)],
+      address: addr,
+      call_type: type,
+      lat: 40.4167 + (Math.random() - 0.5) * 0.09,
+      lon: -86.8753 + (Math.random() - 0.5) * 0.13,
+      confidence: "demo"
+    });
+  }
+  return calls;
+}
+
+// ─────────────────────────────────────────────
+// MAP INIT
+// ─────────────────────────────────────────────
+const map = L.map("map", {
+  center: LAFAYETTE_LL,
+  zoom: 13,
+  zoomControl: true,
+  preferCanvas: true,
+});
+
+// ── Tile layers — OSM standard + optional dark variant ──
+const OSM_ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+const TILES = {
+  dark:  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+           { attribution: OSM_ATTRIB + ' &copy; <a href="https://carto.com">CARTO</a>',
+             subdomains: "abcd", maxZoom: 19 }),
+  light: L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+           { attribution: OSM_ATTRIB, maxZoom: 19 }),
+};
+
+let activeTile = "dark";
+TILES.dark.addTo(map);
+
+function toggleMapStyle() {
+  map.removeLayer(TILES[activeTile]);
+  activeTile = activeTile === "dark" ? "light" : "dark";
+  TILES[activeTile].addTo(map);
+  const root = document.documentElement;
+  if (activeTile === "light") {
+    root.style.setProperty("--bg",     "#f0f2f5");
+    root.style.setProperty("--panel",  "#ffffff");
+    root.style.setProperty("--border", "#dde1ea");
+    root.style.setProperty("--text",   "#1a202c");
+    root.style.setProperty("--text-dim","#4a5568");
+    root.style.setProperty("--muted",  "#718096");
+  } else {
+    root.style.setProperty("--bg",     "#0a0c0f");
+    root.style.setProperty("--panel",  "#111318");
+    root.style.setProperty("--border", "#1e2330");
+    root.style.setProperty("--text",   "#c8d0e0");
+    root.style.setProperty("--text-dim","#6b7a99");
+    root.style.setProperty("--muted",  "#4a5568");
+  }
+  document.getElementById("btnStyle").textContent =
+    activeTile === "dark" ? "☀ LIGHT MAP" : "☾ DARK MAP";
+}
+
+let heatLayer   = null;
+let markerLayer = L.layerGroup().addTo(map);
+let viewMode    = "heat";
+let allCalls    = [];
+let hoursFilter = 24;
+let typeFilter  = "ALL";
+
+// ─────────────────────────────────────────────
+// RENDER
+// ─────────────────────────────────────────────
+function render(calls) {
+  const cutoff = Date.now() - hoursFilter * 3600 * 1000;
+  const visible = calls.filter(c => {
+    const t = new Date(c.timestamp).getTime();
+    if (t < cutoff) return false;
+    if (typeFilter !== "ALL" && c.call_type !== typeFilter) return false;
+    return c.lat && c.lon;
+  });
+
+  // clear
+  if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
+  markerLayer.clearLayers();
+
+  if (viewMode === "heat") {
+    const pts = visible.map(c => [c.lat, c.lon, 1.0]);
+    heatLayer = L.heatLayer(pts, {
+      radius: 22, blur: 18, maxZoom: 17,
+      gradient: { 0.2: "#003355", 0.4: "#005fa3", 0.6: "#00e5ff", 0.8: "#ffd60a", 1.0: "#ff2d55" }
+    }).addTo(map);
+
+  } else if (viewMode === "dots") {
+    visible.forEach(c => {
+      const m = L.circleMarker([c.lat, c.lon], {
+        radius: 7, color: typeColor(c.call_type),
+        fillColor: typeColor(c.call_type), fillOpacity: 0.85, weight: 1.5
+      }).bindPopup(popupHtml(c));
+      markerLayer.addLayer(m);
+    });
+
+  } else if (viewMode === "cluster") {
+    // Group by type and render differently sized clusters
+    const groups = {};
+    visible.forEach(c => {
+      if (!groups[c.call_type]) groups[c.call_type] = [];
+      groups[c.call_type].push(c);
+    });
+    Object.entries(groups).forEach(([type, group]) => {
+      group.forEach(c => {
+        const m = L.circleMarker([c.lat, c.lon], {
+          radius: 6, color: typeColor(type),
+          fillColor: typeColor(type), fillOpacity: 0.75, weight: 1
+        }).bindPopup(popupHtml(c));
+        markerLayer.addLayer(m);
+      });
+    });
+  }
+
+  renderSidebar(calls);
+  updateStats(calls, visible);
+}
+
+function popupHtml(c) {
+  const time = new Date(c.timestamp).toLocaleString("en-US", {
+    month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"
+  });
+  return `
+    <div>
+      <div class="popup-type" style="color:${typeColor(c.call_type)}">${c.call_type}</div>
+      <div class="popup-addr">${c.address || "Address unknown"}</div>
+      <div class="popup-time">${time} · ${c.talkgroup || "?"}</div>
+    </div>`;
+}
+
+// ─────────────────────────────────────────────
+// SIDEBAR
+// ─────────────────────────────────────────────
+function renderSidebar(calls) {
+  const cutoff = Date.now() - hoursFilter * 3600 * 1000;
+  const list = calls
+    .filter(c => new Date(c.timestamp).getTime() >= cutoff)
+    .filter(c => typeFilter === "ALL" || c.call_type === typeFilter)
+    .slice(0, 60);
+
+  document.getElementById("callCount").textContent = list.length;
+
+  if (!list.length) {
+    document.getElementById("callList").innerHTML =
+      `<div class="empty-state">No calls in window.<br>Adjust time slider or filters.</div>`;
+    return;
+  }
+
+  const html = list.map(c => {
+    const t = new Date(c.timestamp);
+    const rel = relTime(t);
+    const dot = typeColor(c.call_type);
+    const unitStr = (c.units && c.units.length) ? c.units.join(", ") : "";
+    return `
+      <div class="call-item" onclick="openModal(${JSON.stringify(JSON.stringify(c))})">
+        <div class="call-dot" style="background:${dot}"></div>
+        <div class="call-content">
+          <div class="call-type" style="color:${dot}">${c.call_type}</div>
+          ${c.notes ? `<div class="call-notes">${c.notes}</div>` : ""}
+          <div class="call-address">${c.address || "—"}</div>
+          ${unitStr ? `<div class="call-units">▶ ${unitStr}</div>` : ""}
+          <div class="call-meta">${rel} · ${c.talkgroup || "?"}</div>
+        </div>
+      </div>`;
+  }).join("");
+
+  document.getElementById("callList").innerHTML = html;
+}
+
+function focusCall(lat, lon) {
+  if (!lat || !lon) return;
+  map.setView([lat, lon], 16, { animate: true });
+}
+
+function openModal(jsonStr) {
+  const c = JSON.parse(jsonStr);
+  const dot = typeColor(c.call_type);
+
+  document.getElementById("mType").textContent  = c.call_type || "Unknown";
+  document.getElementById("mType").style.color  = dot;
+  document.getElementById("mAgency").textContent = `${c.talkgroup || "Unknown"} · ${
+    new Date(c.timestamp).toLocaleString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}`;
+
+  const notesEl = document.getElementById("mNotes");
+  notesEl.textContent = c.notes || "";
+  document.getElementById("mNotesSection").style.display = c.notes ? "" : "none";
+
+  const addrEl = document.getElementById("mAddr");
+  addrEl.textContent = c.address || "Unknown";
+  document.getElementById("mAddrSection").style.display = c.address ? "" : "none";
+
+  const units = c.units || [];
+  const unitsEl = document.getElementById("mUnits");
+  unitsEl.innerHTML = units.length
+    ? units.map(u => `<span class="unit-tag">${u}</span>`).join("")
+    : '<span style="color:var(--muted);font-size:.75rem">None mentioned</span>';
+  document.getElementById("mUnitsSection").style.display = "";
+
+  document.getElementById("mTranscript").textContent = c.transcript || "No transcript available";
+
+  const audioEl = document.getElementById("mAudio");
+  if (c.audio_url) {
+    audioEl.src = c.audio_url;
+    document.getElementById("mAudioSection").style.display = "";
+  } else {
+    document.getElementById("mAudioSection").style.display = "none";
+  }
+
+  document.getElementById("mTime").textContent =
+    new Date(c.timestamp).toLocaleString("en-US", {
+      weekday:"short", month:"short", day:"numeric",
+      hour:"2-digit", minute:"2-digit", second:"2-digit"
+    });
+
+  document.getElementById("modalBackdrop").classList.add("open");
+
+  if (c.lat && c.lon) focusCall(c.lat, c.lon);
+}
+
+function closeModal(e) {
+  if (e && e.target !== document.getElementById("modalBackdrop")) return;
+  document.getElementById("modalBackdrop").classList.remove("open");
+  document.getElementById("mAudio").pause();
+}
+
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") closeModal();
+});
+
+function relTime(d) {
+  const sec = (Date.now() - d.getTime()) / 1000;
+  if (sec < 60) return `${Math.round(sec)}s ago`;
+  if (sec < 3600) return `${Math.round(sec/60)}m ago`;
+  if (sec < 86400) return `${Math.round(sec/3600)}h ago`;
+  return `${Math.round(sec/86400)}d ago`;
+}
+
+// ─────────────────────────────────────────────
+// STATS
+// ─────────────────────────────────────────────
+function updateStats(all, visible) {
+  const today = all.filter(c => {
+    const d = new Date(c.timestamp);
+    const n = new Date();
+    return d.toDateString() === n.toDateString();
+  });
+  document.getElementById("statTotal").textContent    = all.length;
+  document.getElementById("statGeocoded").textContent = all.filter(c => c.lat).length;
+  document.getElementById("statToday").textContent    = today.length;
+}
+
+// ─────────────────────────────────────────────
+// FILTER BUTTONS
+// ─────────────────────────────────────────────
+function buildFilters(calls) {
+  const types = ["ALL", ...Object.keys(
+    calls.reduce((acc,c) => { acc[c.call_type] = true; return acc; }, {})
+  )];
+  const bar = document.getElementById("filterBar");
+  bar.innerHTML = types.map(t =>
+    `<button class="filter-btn${t===typeFilter?" active":""}" data-type="${t}"
+       onclick="setType('${t}')">${t}</button>`
+  ).join("");
+}
+
+function setType(t) {
+  typeFilter = t;
+  buildFilters(allCalls);
+  render(allCalls);
+}
+
+function setMode(m) {
+  viewMode = m;
+  ["heat","dots","cluster"].forEach(id =>
+    document.getElementById("btn"+id.charAt(0).toUpperCase()+id.slice(1))
+      .classList.toggle("active", id === m));
+  render(allCalls);
+}
+
+// ─────────────────────────────────────────────
+// DATA FETCH
+// ─────────────────────────────────────────────
+async function fetchData() {
+  try {
+    const resp = await fetch(DATA_URL + "?_=" + Date.now());
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const calls = await resp.json();
+    const wasEmpty = allCalls.length === 0;
+    const hadNew = calls.length > allCalls.length;
+
+    allCalls = calls;
+    buildFilters(calls);
+    render(calls);
+
+    if (!wasEmpty && hadNew) flashScan();
+
+    setStatus("LIVE", true);
+    document.getElementById("statusText").textContent = "LIVE · " +
+      new Date().toLocaleTimeString("en-US", {hour:"2-digit",minute:"2-digit"});
+  } catch (err) {
+    console.warn("Fetch error (trying demo data):", err);
+    if (DEMO_MODE && allCalls.length === 0) {
+      allCalls = genDemoData();
+      buildFilters(allCalls);
+      render(allCalls);
+      setStatus("DEMO", false);
+    } else {
+      setStatus("STALE", false);
+    }
+  }
+}
+
+function setStatus(label, live) {
+  const pill = document.getElementById("statusPill");
+  const txt  = document.getElementById("statusText");
+  pill.className = "status-pill " + (live ? "live" : "stale");
+  txt.textContent = label;
+}
+
+function flashScan() {
+  const el = document.createElement("div");
+  el.className = "scanline";
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 1300);
+}
+
+// ─────────────────────────────────────────────
+// TIME SLIDER
+// ─────────────────────────────────────────────
+const slider = document.getElementById("timeSlider");
+const tLabel = document.getElementById("timeLabel");
+slider.addEventListener("input", () => {
+  const h = parseInt(slider.value);
+  hoursFilter = h;
+  tLabel.textContent = h >= 168 ? "7d" : h >= 72 ? `${Math.round(h/24)}d` : `${h}h`;
+  render(allCalls);
+});
+
+// ─────────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────────
+fetchData();
+setInterval(fetchData, REFRESH_MS);
+</script>
+</body>
+</html>
