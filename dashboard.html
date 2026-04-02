@@ -259,6 +259,40 @@
     opacity: .8;
   }
 
+  .conf-badge {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: .52rem;
+    padding: .08rem .35rem;
+    border-radius: 2px;
+    letter-spacing: .06em;
+    vertical-align: middle;
+    margin-left: .3rem;
+    opacity: .7;
+  }
+  .conf-badge.llm      { background: rgba(0,229,255,.15); color: var(--accent); }
+  .conf-badge.regex    { background: rgba(57,217,138,.12); color: var(--ok); }
+  .conf-badge.fallback { background: rgba(255,107,53,.12); color: var(--warn); }
+
+  /* ── SEARCH ────────────────────────────────── */
+  .sidebar-search {
+    padding: .5rem .8rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-search input {
+    width: 100%;
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: .3rem .6rem;
+    font-family: var(--mono);
+    font-size: .65rem;
+    color: var(--text);
+    outline: none;
+  }
+  .sidebar-search input::placeholder { color: var(--muted); }
+  .sidebar-search input:focus { border-color: var(--accent); }
+
   /* ── DETAIL MODAL ─────────────────────────── */
   .modal-backdrop {
     display: none;
@@ -357,7 +391,8 @@
 
   /* ── MAP ──────────────────────────────────── */
   #map {
-    flex: 1;
+    width: 100%;
+    height: 100%;
     background: var(--bg);
   }
 
@@ -575,6 +610,10 @@
       <span id="callCount" style="color:var(--accent)">0</span>
     </div>
 
+    <div class="sidebar-search">
+      <input type="text" id="searchBox" placeholder="Search address, type, unit…" oninput="onSearch()">
+    </div>
+
     <div class="filters" id="filterBar">
       <button class="filter-btn active" data-type="ALL">ALL</button>
     </div>
@@ -596,7 +635,7 @@
   </div>
 
   <!-- MAP -->
-  <div style="flex:1; position:relative;">
+  <div style="flex:1; position:relative; display:flex; flex-direction:column;">
     <div id="map"></div>
     <div class="map-controls">
       <button class="map-btn active" id="btnHeat" onclick="setMode('heat')">HEATMAP</button>
@@ -620,18 +659,12 @@ const DEMO_MODE     = true;          // set false when poller.py is running
 // TYPE → COLOR map
 // ─────────────────────────────────────────────
 const TYPE_COLORS = {
-  "Medical":         "#ff6b35",
   "Fire":            "#ff2d55",
+  "Medical":         "#ff6b35",
   "Traffic Accident":"#ffd60a",
   "Welfare Check":   "#bf5af2",
-  "Shooting":        "#ff3b30",
-  "Assault":         "#ff9f0a",
-  "Theft":           "#30b0c7",
-  "Burglary":        "#0a84ff",
-  "Drug":            "#34c759",
-  "Disturbance":     "#ac8e68",
-  "Suspicious":      "#636366",
-  "Traffic Stop":    "#48484a",
+  "Hazmat":          "#34c759",
+  "Water Rescue":    "#0a84ff",
   "Unknown":         "#3a3a3c",
   "Other":           "#3a3a3c",
 };
@@ -660,7 +693,7 @@ function genDemoData() {
     calls.push({
       id: `demo-${i}`,
       timestamp: new Date(now - ageMs).toISOString(),
-      talkgroup: ["LFD DISP","LPD DISP","TIPCO EMS","WLFD DISP"][Math.floor(Math.random()*4)],
+      talkgroup: ["LFD DISP","TIPCO EMS","WLFD DISP","EMS OPS"][Math.floor(Math.random()*4)],
       address: addr,
       call_type: type,
       lat: 40.4167 + (Math.random() - 0.5) * 0.09,
@@ -724,6 +757,7 @@ let viewMode    = "heat";
 let allCalls    = [];
 let hoursFilter = 24;
 let typeFilter  = "ALL";
+let searchQuery = "";
 
 // ─────────────────────────────────────────────
 // RENDER
@@ -794,18 +828,33 @@ function popupHtml(c) {
 // ─────────────────────────────────────────────
 // SIDEBAR
 // ─────────────────────────────────────────────
+function confBadge(conf) {
+  if (!conf || conf === "demo" || conf === "none") return "";
+  const cls = conf === "llm" ? "llm" : conf.startsWith("regex-") ? "fallback" : "regex";
+  const label = conf === "llm" ? "AI" : conf === "regex" ? "RX" : "RX?";
+  return `<span class="conf-badge ${cls}">${label}</span>`;
+}
+
+function matchesSearch(c, q) {
+  if (!q) return true;
+  const hay = [c.call_type, c.address, c.talkgroup, c.notes,
+               ...(c.units || [])].filter(Boolean).join(" ").toLowerCase();
+  return q.toLowerCase().split(/\s+/).every(tok => hay.includes(tok));
+}
+
 function renderSidebar(calls) {
   const cutoff = Date.now() - hoursFilter * 3600 * 1000;
   const list = calls
     .filter(c => new Date(c.timestamp).getTime() >= cutoff)
     .filter(c => typeFilter === "ALL" || c.call_type === typeFilter)
+    .filter(c => matchesSearch(c, searchQuery))
     .slice(0, 60);
 
   document.getElementById("callCount").textContent = list.length;
 
   if (!list.length) {
     document.getElementById("callList").innerHTML =
-      `<div class="empty-state">No calls in window.<br>Adjust time slider or filters.</div>`;
+      `<div class="empty-state">No calls match.<br>Adjust filters or search.</div>`;
     return;
   }
 
@@ -818,7 +867,7 @@ function renderSidebar(calls) {
       <div class="call-item" onclick="openModal(${JSON.stringify(JSON.stringify(c))})">
         <div class="call-dot" style="background:${dot}"></div>
         <div class="call-content">
-          <div class="call-type" style="color:${dot}">${c.call_type}</div>
+          <div class="call-type" style="color:${dot}">${c.call_type}${confBadge(c.confidence)}</div>
           ${c.notes ? `<div class="call-notes">${c.notes}</div>` : ""}
           <div class="call-address">${c.address || "—"}</div>
           ${unitStr ? `<div class="call-units">▶ ${unitStr}</div>` : ""}
@@ -828,6 +877,11 @@ function renderSidebar(calls) {
   }).join("");
 
   document.getElementById("callList").innerHTML = html;
+}
+
+function onSearch() {
+  searchQuery = document.getElementById("searchBox").value.trim();
+  renderSidebar(allCalls);
 }
 
 function focusCall(lat, lon) {
