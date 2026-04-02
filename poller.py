@@ -27,6 +27,7 @@ import tempfile
 import argparse
 import schedule
 import requests
+import cloudscraper
 import whisper
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
@@ -40,11 +41,11 @@ OPENMHZ_SYSTEM   = "tippco"          # Tippecanoe County shortName
 OPENMHZ_BASE     = "https://api.openmhz.com"
 POLL_INTERVAL_S  = 30                # seconds between API polls
 DB_PATH          = os.environ.get("DB_PATH", "dispatch.db")
-WHISPER_MODEL    = "base.en"         # tiny.en / base.en / small.en / medium.en
+WHISPER_MODEL    = os.environ.get("WHISPER_MODEL", "base.en")  # tiny.en / base.en / small.en / medium.en
 
 # ── Ollama config ──────────────────────────────────────────────────────────
 OLLAMA_URL       = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
-OLLAMA_MODEL     = "llama3.2"        # or: mistral, llama3.1, gemma2, phi3
+OLLAMA_MODEL     = os.environ.get("OLLAMA_MODEL", "llama3.2")  # or: mistral, llama3.1, gemma2, phi3
 #   Model recommendations for this task on Apple Silicon:
 #     llama3.2   (2GB)  — fast, good JSON, great for short transcripts
 #     mistral    (4GB)  — slightly better address parsing, still quick
@@ -55,9 +56,16 @@ OLLAMA_MODEL     = "llama3.2"        # or: mistral, llama3.1, gemma2, phi3
 CITY_CONTEXT     = "Lafayette, Indiana"
 GEOCODE_SUFFIX   = ", Lafayette, IN, USA"
 
-# Talkgroups to track (fire/EMS/police dispatch channels)
-# Leave empty list [] to capture ALL talkgroups
-TALKGROUP_FILTER = []  # e.g. ["LFD DISP", "LPD DISP", "TIPCO EMS"]
+# Talkgroups to track — fire/EMS only (no police)
+# Adjust these to match the exact talkgroup tags shown on OpenMHz for tippco
+TALKGROUP_FILTER = [
+    "LFD DISP",    # Lafayette Fire Dept dispatch
+    "WLFD DISP",   # West Lafayette Fire Dept dispatch
+    "TIPCO EMS",   # Tippecanoe County EMS
+    "LFD OPS",     # LFD operations
+    "WLFD OPS",    # WLFD operations
+    "EMS OPS",     # EMS operations
+]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -114,8 +122,12 @@ def insert_call(data: dict):
     con.close()
 
 # ─────────────────────────────────────────────
-# OPENMHZ API
+# OPENMHZ API  (cloudscraper bypasses Cloudflare)
 # ─────────────────────────────────────────────
+_scraper = cloudscraper.create_scraper(
+    browser={"browser": "chrome", "platform": "windows", "mobile": False}
+)
+
 def fetch_recent_calls(limit: int = 20, filter_time: int = None) -> list:
     """Fetch most recent calls from Tippecanoe County feed."""
     params = {"limit": limit}
@@ -126,18 +138,18 @@ def fetch_recent_calls(limit: int = 20, filter_time: int = None) -> list:
 
     try:
         url = f"{OPENMHZ_BASE}/{OPENMHZ_SYSTEM}/calls"
-        resp = requests.get(url, params=params, timeout=10)
+        resp = _scraper.get(url, params=params, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         return data.get("calls", [])
-    except requests.RequestException as e:
+    except Exception as e:
         log.error(f"OpenMHz API error: {e}")
         return []
 
 def download_audio(url: str) -> str | None:
     """Download call audio to a temp file. Returns path or None."""
     try:
-        resp = requests.get(url, timeout=30, stream=True)
+        resp = _scraper.get(url, timeout=30, stream=True)
         resp.raise_for_status()
         suffix = ".mp3" if "mp3" in url else ".wav"
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
@@ -169,11 +181,25 @@ def transcribe(audio_path: str) -> str:
             language="en",
             fp16=False,          # set True if you have a GPU
             initial_prompt=(
-                "Lafayette Indiana fire EMS dispatch tone-out. "
-                "Engine 1 Engine 3 Medic 2 Ladder 1 respond to structure fire. "
-                "Addresses: 1200 South 18th Street, intersection of Main and 9th, "
-                "Sagamore Parkway, Teal Road, Greenbush Street, McCarty Lane, "
-                "Union Hospital, Franciscan Health, Purdue University campus."
+                "Lafayette Indiana emergency dispatch. Fire EMS police. "
+                "Units: Engine 1 Engine 2 Engine 3 Engine 4 Engine 5 Engine 6 Engine 7 "
+                "Medic 1 Medic 2 Medic 3 Medic 4 Medic 5 Ladder 1 Ladder 2 "
+                "Battalion 1 Squad 1 Rescue 1 Tanker 1 "
+                "Engine 11 Engine 12 Engine 13 Medic 11 "
+                "respond to structure fire cardiac arrest traffic accident. "
+                "Streets: Sagamore Parkway South 18th Street Teal Road McCarty Lane "
+                "Greenbush Street Union Street Main Street State Street "
+                "Schuyler Avenue Columbian Avenue Concord Road "
+                "South 9th Street North 9th Street Ferry Street Brown Street "
+                "Creasy Lane Klondike Road Yeager Road Cumberland Avenue "
+                "South River Road North Salisbury Street Beck Lane "
+                "US 231 State Road 38 State Road 26 Interstate 65. "
+                "Locations: Union Hospital Franciscan Health IU Health Arnett "
+                "Purdue University Ross-Ade Stadium Happy Hollow Park "
+                "Tippecanoe Mall Wabash River. "
+                "Incidents: cardiac arrest unconscious not breathing seizure overdose "
+                "structure fire vehicle fire brush fire smoke investigation "
+                "motor vehicle accident head-on collision pedestrian struck."
             )
         )
         return result["text"].strip()
@@ -190,12 +216,13 @@ EXTRACTION_PROMPT = """You extract dispatch information from noisy emergency rad
 Return ONLY a raw JSON object — no markdown, no explanation, no code fences.
 Keys:
   "address"   : street address or intersection (Title Case, no city/state), or null
-  "call_type" : one of: Medical, Fire, Traffic Accident, Welfare Check, Theft,
-                Assault, Disturbance, Shooting, Drug, Burglary, Suspicious,
-                Traffic Stop, Other — or null if unclear
+  "call_type" : one of: Medical, Fire, Traffic Accident, Welfare Check,
+                Hazmat, Water Rescue, Other — or null if unclear
+  "units"     : list of responding unit identifiers mentioned (e.g. ["Engine 1", "Medic 2"]), or []
+  "notes"     : one concise sentence describing the incident (max 15 words), or null
 
 Example output:
-{"address": "1200 South 18th Street", "call_type": "Medical"}
+{"address": "1200 South 18th Street", "call_type": "Medical", "units": ["Medic 2", "Engine 3"], "notes": "Unresponsive male patient, possible cardiac arrest."}
 
 Transcript: {transcript}"""
 
@@ -216,34 +243,45 @@ def _call_ollama(prompt: str) -> str:
 
 def extract_dispatch_info(transcript: str) -> dict:
     """
-    Extract address + call type from a radio transcript.
-    Tries regex first (fast, zero cost), falls back to Ollama for hard cases.
+    Extract address, call type, units, and notes from a radio transcript.
+    Regex runs first (fast, zero cost). LLM fills any gaps regex missed.
+    Results are merged: regex units are always kept, LLM fills missing fields.
     """
     if not transcript:
-        return {"address": None, "call_type": None, "confidence": "none"}
+        return {"address": None, "call_type": None, "units": [], "notes": None, "confidence": "none"}
 
-    # ── Fast regex pass — no model needed for clear transcripts ────────
+    # ── Fast regex pass ─────────────────────────────────────────────────
     regex_result = _regex_extract(transcript)
+
+    # If regex got both address and call_type, we're done (units already extracted)
     if regex_result["address"] and regex_result["call_type"]:
         regex_result["confidence"] = "regex"
         return regex_result
 
-    # ── Ollama for ambiguous / noisy transcripts ────────────────────────
+    # ── Ollama for gaps ──────────────────────────────────────────────────
     try:
-        prompt = EXTRACTION_PROMPT.format(transcript=transcript[:600])
+        prompt = EXTRACTION_PROMPT.format(transcript=transcript[:700])
         raw = _call_ollama(prompt)
 
         # Strip accidental ```json fences some models add
-        raw = re.sub(r"```json|```", "", raw).strip()
+        raw = re.sub(r"```(?:json)?", "", raw).strip()
 
-        # Sometimes the model prints text before the JSON — grab first {...}
+        # Grab first {...} block in case model adds preamble text
         json_match = re.search(r"\{.*?\}", raw, re.DOTALL)
         if not json_match:
             raise ValueError(f"No JSON in response: {raw!r}")
 
         parsed = json.loads(json_match.group())
-        parsed["confidence"] = "llm"
-        return parsed
+
+        # Merge: prefer LLM for missing fields, always keep regex units
+        merged = {
+            "address":   parsed.get("address")   or regex_result.get("address"),
+            "call_type": parsed.get("call_type") or regex_result.get("call_type"),
+            "notes":     parsed.get("notes"),
+            "units":     _merge_units(regex_result.get("units", []), parsed.get("units", [])),
+            "confidence": "llm",
+        }
+        return merged
 
     except requests.exceptions.ConnectionError:
         log.warning("Ollama not reachable — is it running? (ollama serve)")
@@ -254,36 +292,65 @@ def extract_dispatch_info(transcript: str) -> dict:
         regex_result["confidence"] = "regex-fallback"
         return regex_result
 
-def _regex_extract(text: str) -> dict:
-    """Simple regex patterns for common dispatch address formats."""
-    result = {"address": None, "call_type": None}
 
-    # Address patterns
+def _merge_units(regex_units: list, llm_units: list) -> list:
+    """Combine unit lists from regex and LLM, deduplicating."""
+    seen = set()
+    merged = []
+    for u in (regex_units or []) + (llm_units or []):
+        key = u.lower().strip()
+        if key not in seen:
+            seen.add(key)
+            merged.append(u)
+    return merged
+
+def _regex_extract(text: str) -> dict:
+    """Regex patterns for common dispatch address formats, call types, and units."""
+    result = {"address": None, "call_type": None, "units": [], "notes": None}
+
+    # Address patterns — ordered from most to least specific
     addr_patterns = [
-        r"\b(\d{1,5}\s+(?:North|South|East|West|N\.?|S\.?|E\.?|W\.?)?\s*[A-Z][a-zA-Z\s]{2,30}(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd|Court|Ct|Way|Place|Pl)\.?)\b",
-        r"\b(intersection of [A-Z][a-zA-Z\s]+ and [A-Z][a-zA-Z\s]+)\b",
-        r"\b([A-Z][a-zA-Z\s]+ and [A-Z][a-zA-Z\s]+(?:Street|St|Avenue|Ave|Road|Rd))\b",
+        # Full numbered address with direction and street type
+        r"\b(\d{1,5}\s+(?:North|South|East|West|N\.?|S\.?|E\.?|W\.?)\s+[A-Z][a-zA-Z]{2,25}\s+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd|Court|Ct|Way|Place|Pl|Parkway|Pkwy)\.?)\b",
+        # Numbered address without direction
+        r"\b(\d{1,5}\s+[A-Z][a-zA-Z]{2,25}\s+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd|Court|Ct|Way|Place|Pl|Parkway|Pkwy)\.?)\b",
+        # Highway/US route references
+        r"\b(\d{1,5}\s+(?:US|State|Indiana|IN)\s+(?:Highway|Hwy|Route|Road|Rd)?\s*\d+)\b",
+        r"\b(US\s+(?:Highway\s+)?\d+(?:\s+(?:North|South|East|West))?)\b",
+        r"\b(State\s+Road\s+\d+)\b",
+        # Named intersections
+        r"\b(intersection of [A-Za-z\s]{3,25} and [A-Za-z\s]{3,25})\b",
+        r"\b([A-Z][a-zA-Z\s]{2,20} and [A-Z][a-zA-Z\s]{2,20}(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln))\b",
+        # Named locations (hospitals, landmarks)
+        r"\b((?:Union Hospital|Franciscan Health|IU Health Arnett|Purdue University|Tippecanoe Mall|Ross-Ade Stadium)(?:\s+[A-Za-z\s]{0,20})?)\b",
     ]
     for pat in addr_patterns:
         m = re.search(pat, text, re.IGNORECASE)
         if m:
-            result["address"] = m.group(1).strip()
+            addr = m.group(1).strip()
+            # Title-case it
+            result["address"] = " ".join(w.capitalize() for w in addr.split())
             break
 
-    # Call type keywords
+    # Call type keywords — fire/EMS focused, ordered by specificity
     call_keywords = {
-        "Medical": ["cardiac", "medical", "breathing", "unconscious", "seizure", "ems", "ambulance", "overdose", "trauma"],
-        "Fire": ["fire", "smoke", "flames", "structure fire", "vehicle fire", "brush fire"],
-        "Traffic Accident": ["accident", "crash", "collision", "mvc", "mva", "hit and run", "traffic"],
-        "Welfare Check": ["welfare", "well-being", "check on", "mental health", "suicidal"],
-        "Shooting": ["shots fired", "shooting", "gunshot", "firearm"],
-        "Assault": ["assault", "fight", "battery", "domestic"],
-        "Theft": ["theft", "stolen", "shoplifting", "robbery"],
-        "Burglary": ["burglary", "break-in", "breaking and entering"],
-        "Drug": ["drug", "narcotics", "overdose"],
-        "Disturbance": ["disturbance", "noise complaint", "loud", "disorderly"],
-        "Suspicious": ["suspicious", "prowler", "trespassing"],
-        "Traffic Stop": ["traffic stop", "vehicle stop"],
+        "Fire":            ["structure fire", "house fire", "vehicle fire", "brush fire", "grass fire",
+                            "building fire", "apartment fire", "flames", "smoke showing",
+                            "fire alarm", "odor of smoke", "fire in"],
+        "Medical":         ["cardiac arrest", "heart attack", "chest pain", "not breathing",
+                            "unconscious", "unresponsive", "breathing difficulty", "shortness of breath",
+                            "seizure", "stroke", "overdose", "medical emergency", "ems", "ambulance",
+                            "fall victim", "trauma", "diabetic", "allergic reaction", "choking",
+                            "hemorrhage", "bleeding", "burn", "electrocution", "drowning"],
+        "Traffic Accident":["motor vehicle accident", "vehicle accident", "traffic accident",
+                            "mva", "mvc", "crash", "collision", "rollover",
+                            "pedestrian struck", "bicycle struck", "head-on", "entrapment"],
+        "Welfare Check":   ["welfare check", "well-being check", "check on subject",
+                            "mental health", "suicidal", "person in crisis", "not answering door"],
+        "Hazmat":          ["hazmat", "hazardous material", "gas leak", "chemical spill",
+                            "carbon monoxide", "co detector", "fuel spill", "natural gas"],
+        "Water Rescue":    ["water rescue", "swift water", "drowning", "flood rescue",
+                            "wabash river", "person in water"],
     }
     text_lower = text.lower()
     for ctype, keywords in call_keywords.items():
@@ -291,31 +358,92 @@ def _regex_extract(text: str) -> dict:
             result["call_type"] = ctype
             break
 
+    # Unit extraction
+    result["units"] = _extract_units(text)
+
     return result
+
+
+def _extract_units(text: str) -> list[str]:
+    """Extract responding unit designations from a dispatch transcript."""
+    unit_patterns = [
+        r"\b(Engine\s+\d+[A-Z]?)\b",
+        r"\b(Ladder\s+\d+[A-Z]?)\b",
+        r"\b(Medic\s+\d+[A-Z]?)\b",
+        r"\b(Battalion\s+\d+)\b",
+        r"\b(Rescue\s+\d+)\b",
+        r"\b(Tanker\s+\d+)\b",
+        r"\b(Squad\s+\d+)\b",
+        r"\b(Truck\s+\d+)\b",
+        r"\b(Tower\s+\d+)\b",
+        r"\b(Brush\s+\d+)\b",
+        r"\b(Air\s+\d+)\b",
+        r"\b(Car\s+\d{2,3})\b",
+        r"\b(Unit\s+\d+)\b",
+    ]
+    seen = set()
+    units = []
+    for pat in unit_patterns:
+        for m in re.finditer(pat, text, re.IGNORECASE):
+            # Normalize: collapse whitespace, title-case
+            unit = " ".join(m.group(1).split()).title()
+            if unit not in seen:
+                seen.add(unit)
+                units.append(unit)
+    return units
+
+
+def _looks_like_address(text: str) -> bool:
+    """Sanity-check that an extracted string is plausibly a real address."""
+    if not text or len(text) < 5:
+        return False
+    # Named landmarks are always valid
+    landmarks = ["hospital", "university", "stadium", "mall", "health", "park"]
+    if any(lm in text.lower() for lm in landmarks):
+        return True
+    # Must have a digit OR be a clear intersection
+    has_number = bool(re.search(r"\d", text))
+    is_intersection = bool(re.search(r"\band\b", text, re.IGNORECASE))
+    # Should also have a street-type word
+    has_street_type = bool(re.search(
+        r"\b(st|ave|rd|dr|ln|blvd|ct|way|pl|pkwy|highway|hwy|road|street|avenue"
+        r"|drive|lane|boulevard|court|place|parkway|route)\b",
+        text, re.IGNORECASE
+    ))
+    return (has_number or is_intersection) and (has_street_type or has_number)
 
 # ─────────────────────────────────────────────
 # GEOCODING
 # ─────────────────────────────────────────────
 _geocoder = Nominatim(user_agent="lafayette-dispatch-monitor/1.0")
+_geocode_cache: dict[str, tuple] = {}  # address → (lat, lon)
 
 def geocode(address: str) -> tuple[float | None, float | None]:
     """Convert an address string to (lat, lon). Returns (None, None) on failure."""
     if not address:
         return None, None
+    key = address.lower().strip()
+    if key in _geocode_cache:
+        return _geocode_cache[key]
+
+    result = (None, None)
     query = address + GEOCODE_SUFFIX
     try:
         loc = _geocoder.geocode(query, timeout=5)
         if loc:
-            return loc.latitude, loc.longitude
-        # Try without city suffix
-        loc = _geocoder.geocode(address, timeout=5)
-        if loc:
-            return loc.latitude, loc.longitude
+            result = (loc.latitude, loc.longitude)
+        else:
+            # Try without city suffix
+            loc = _geocoder.geocode(address, timeout=5)
+            if loc:
+                result = (loc.latitude, loc.longitude)
     except GeocoderTimedOut:
         log.warning(f"Geocoder timeout for: {address}")
     except Exception as e:
         log.warning(f"Geocoding error for '{address}': {e}")
-    return None, None
+
+    _geocode_cache[key] = result
+    return result
 
 # ─────────────────────────────────────────────
 # MAIN PIPELINE
