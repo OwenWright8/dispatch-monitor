@@ -1,29 +1,48 @@
 services:
 
   poller:
-    build: .
+    # Option A — pre-built image from GitHub Container Registry (recommended for Dockge)
+    # Replace OWNER with your GitHub username after the Actions workflow has run once.
+    image: ghcr.io/${GHCR_OWNER:-your-github-username}/dispatch-monitor:latest
+    # Option B — build locally (use when you've cloned the repo)
+    # Comment out 'image:' above and uncomment 'build:' below.
+    # build: .
     restart: unless-stopped
-    volumes:
-      - ./data:/app/data        # persists dispatch.db and calls.json
-      - whisper-cache:/root/.cache/whisper   # cache Whisper model download
+    env_file:
+      - path: .env
+        required: false        # .env is optional; defaults are baked into the image
     environment:
       - DB_PATH=/app/data/dispatch.db
       - CALLS_JSON=/app/data/calls.json
-      - OLLAMA_URL=http://host.docker.internal:11434/api/generate
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434/api/generate}
+      - WHISPER_MODEL=${WHISPER_MODEL:-base.en}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+    volumes:
+      - dispatch-data:/app/data
+      - whisper-cache:/root/.cache/whisper
     extra_hosts:
-      - "host.docker.internal:host-gateway"   # lets container reach host Ollama
+      - "host.docker.internal:host-gateway"  # reach Ollama on the Docker host
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import sqlite3,os; con=sqlite3.connect(os.environ['DB_PATH']); con.execute('SELECT 1'); con.close()"]
+      interval: 60s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
 
   web:
     image: nginx:alpine
     restart: unless-stopped
     ports:
-      - "8086:80"
+      - "${WEB_PORT:-8086}:80"
     volumes:
-      - ./data:/usr/share/nginx/html/data:ro   # serve calls.json
+      - dispatch-data:/usr/share/nginx/html/data:ro
       - ./dashboard.html:/usr/share/nginx/html/dashboard.html:ro
-      - ./lib:/usr/share/nginx/html/lib:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - poller
+      poller:
+        condition: service_healthy
 
 volumes:
+  dispatch-data:
   whisper-cache:
