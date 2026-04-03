@@ -52,18 +52,25 @@ services:
       - whisper-cache:/root/.cache/whisper
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import sqlite3,os; con=sqlite3.connect(os.environ['DB_PATH']); con.execute('SELECT 1'); con.close()"]
+      interval: 60s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
 
   web:
-    image: nginx:alpine
+    # dashboard.html and nginx config are baked in — no bind mounts needed
+    image: ghcr.io/YOUR_GITHUB_USERNAME/dispatch-monitor-web:latest
     restart: unless-stopped
     ports:
       - "8086:80"
     volumes:
       - dispatch-data:/usr/share/nginx/html/data:ro
-      - ./dashboard.html:/usr/share/nginx/html/dashboard.html:ro
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - poller
+      poller:
+        condition: service_healthy
 
 volumes:
   dispatch-data:
@@ -71,7 +78,7 @@ volumes:
 ```
 
 > **Note:** Replace `YOUR_GITHUB_USERNAME` with your actual GitHub username.
-> To make the package public: GitHub → your profile → Packages → dispatch-monitor → Package settings → Change visibility → Public.
+> To make the packages public: GitHub → your profile → Packages → select each package → Package settings → Change visibility → Public.
 
 ---
 

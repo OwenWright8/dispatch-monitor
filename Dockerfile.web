@@ -1,0 +1,6 @@
+FROM nginx:alpine
+
+# Bake the dashboard and nginx config directly into the image.
+# No bind mounts needed — works out of the box in Dockge / Portainer.
+COPY dashboard.html /usr/share/nginx/html/dashboard.html
+COPY nginx.conf     /etc/nginx/conf.d/default.conf
