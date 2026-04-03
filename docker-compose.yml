@@ -1,11 +1,10 @@
 services:
 
   poller:
-    # Option A — pre-built image from GitHub Container Registry (recommended for Dockge)
-    # Replace OWNER with your GitHub username after the Actions workflow has run once.
+    # Pre-built image from GitHub Container Registry (recommended for Dockge)
+    # Replace GHCR_OWNER with your GitHub username, or set it in .env
     image: ghcr.io/${GHCR_OWNER:-your-github-username}/dispatch-monitor:latest
-    # Option B — build locally (use when you've cloned the repo)
-    # Comment out 'image:' above and uncomment 'build:' below.
+    # To build locally instead: comment out 'image:' above and uncomment 'build:' below
     # build: .
     restart: unless-stopped
     env_file:
@@ -31,14 +30,17 @@ services:
       retries: 3
 
   web:
-    image: nginx:alpine
+    # dashboard.html and nginx.conf are baked into this image — no bind mounts needed
+    image: ghcr.io/${GHCR_OWNER:-your-github-username}/dispatch-monitor-web:latest
+    # To build locally instead: comment out 'image:' above and uncomment 'build:' below
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile.web
     restart: unless-stopped
     ports:
       - "${WEB_PORT:-8086}:80"
     volumes:
-      - dispatch-data:/usr/share/nginx/html/data:ro
-      - ./dashboard.html:/usr/share/nginx/html/dashboard.html:ro
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - dispatch-data:/usr/share/nginx/html/data:ro  # live calls.json from poller
     depends_on:
       poller:
         condition: service_healthy
