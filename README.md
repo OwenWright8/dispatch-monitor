@@ -61,60 +61,76 @@ Things worth knowing:
 
 API docs are at `/api/docs`.
 
-## Running it
+## Install
 
-### M4 Mac mini (16 GB)
-
-Run Ollama natively, since Docker on macOS can't use the GPU:
+You need Docker (Docker Desktop on a Mac; it's built into the UGREEN NAS app center). Everything
+else, including the AI model server, runs in the stack.
 
 ```bash
-brew install ollama        # or the app from ollama.com
-ollama serve &             # the app pulls qwen2.5:7b itself on first start
-
-git clone https://github.com/OwenWright8/dispatch-monitor.git && cd dispatch-monitor
-cp .env.example .env
+mkdir dispatch-monitor && cd dispatch-monitor
+curl -fsSLO https://raw.githubusercontent.com/OwenWright8/dispatch-monitor/main/docker-compose.yml
 docker compose up -d
 ```
 
-Expected load: Whisper about 2 s per clip and the LLM about 2 s per dispatch. That's well under 5% of the machine for roughly 300
-transmissions a day. Memory is about 1.5 GB for the app plus about 5 GB for the 7B model while it's loaded.
+Open **http://<that machine's IP>:8086**. That's it.
 
-Without Docker: `pip install -r requirements.txt && OLLAMA_URL=http://localhost:11434 python -m dispatch`
-(Python 3.10–3.13) and open http://localhost:8080.
+Both images are built by GitHub Actions with everything inside: the speech model, the AI model
+(qwen2.5:7b) and the county street and place data. The first `up` pulls about 7 GB of images. After
+that the stack starts in under a minute and needs no other downloads.
 
-### UGREEN DXP4800 Plus (32 GB), Docker / Dockge
+**Getting data in right away:** on first start the app loads the **last 24 hours** of calls in the
+background while it listens live. You can load more at any time with **Load past calls** in the
+dashboard header (24 h, 3 days or 7 days). The header shows how many clips are still queued. Live
+calls always go first: the worker processes the newest clip next, so a call that comes in during a
+backfill waits for at most the one clip already in progress. Set `BACKFILL_HOURS=0` in `.env` to start
+live-only.
 
-The NAS has no GPU, so Ollama runs as a second container on the CPU. In `.env`:
+**Dockge / Portainer:** create a stack, paste in [`docker-compose.yml`](docker-compose.yml), and deploy.
+Nothing else is needed.
 
+**Optional:** to use the CARTO dark/light map style, create a `.env` file next to `docker-compose.yml` containing
+`CARTO_API_KEY=your-key`. In Dockge, that goes in the stack's `.env` box. Then run `docker compose up -d` again.
+Other settings are in [`.env.example`](.env.example).
+
+**Update:** `docker compose pull && docker compose up -d`. Data is kept in Docker volumes.
+
+### What to expect on each machine
+
+| | M4 Mac mini, 16 GB | UGREEN DXP4800 Plus, 32 GB |
+|---|---|---|
+| Speech-to-text per clip | ~2 s | ~5 s |
+| AI extraction per dispatch | ~10 s | ~30–60 s |
+| Memory in use | ~7 GB | ~7 GB |
+| Working through a 24 h backfill | ~1 h | ~2–3 h |
+
+There are about 300 transmissions and 150 dispatches a day, so either machine keeps up easily. On the Mac,
+Docker Desktop gives containers half the RAM by default (8 GB), which is enough. If the model ever gets
+killed, raise it under *Settings → Resources*. If the NAS falls behind, set `OLLAMA_MODEL=qwen2.5:3b` in
+`.env` (about 2× faster, less accurate call types).
+
+### Building from source
+
+```bash
+git clone https://github.com/OwenWright8/dispatch-monitor.git && cd dispatch-monitor
+# in docker-compose.yml, swap each "image:" line for the "build:" line under it
+docker compose up -d --build
 ```
-COMPOSE_PROFILES=ollama
-OLLAMA_URL=http://ollama:11434
-```
 
-then `docker compose up -d` (in Dockge, paste `docker-compose.yml` and put those two lines in its
-`.env` box). The first start downloads the 7B model (about 5 GB), the Whisper model (about 500 MB) and the county street
-data (about 3 MB), all into volumes.
-
-Expected load: Whisper a few seconds per clip and the LLM about 30–60 s per dispatch on the Pentium, i.e. a
-couple of CPU-hours a day, with live calls showing up within a minute or two. If it falls behind, set
-`OLLAMA_MODEL=qwen2.5:3b` (about 2× faster, less accurate call types) or `WHISPER_MODEL=base.en`.
-
-### Pre-built image
-
-GitHub Actions publishes `ghcr.io/owenwright8/dispatch-monitor:latest` (amd64 + arm64) on every push
-to `main`. To build locally instead, uncomment `build: .` in `docker-compose.yml`.
+GitHub Actions publishes both images (amd64 + arm64) on pushes to `main`:
+`ghcr.io/owenwright8/dispatch-monitor` whenever the app changes, and
+`ghcr.io/owenwright8/dispatch-monitor-ollama` when `Dockerfile.ollama` changes. To pick up a newer
+Ollama release, run that workflow manually. Pull requests build both images without publishing them.
 
 ## Configuration
 
-All settings are environment variables; see `.env.example`. The main ones:
+All settings are optional and go in `.env` (see `.env.example`):
 
 | Variable | Default | |
 |---|---|---|
-| `OLLAMA_URL` | `http://host.docker.internal:11434` | Ollama server |
 | `OLLAMA_MODEL` | `qwen2.5:7b` | pulled automatically if missing |
 | `LLM_ENABLED` | `true` | `false` = keyword rules only, no Ollama |
 | `WHISPER_MODEL` | `small.en` | `base.en` / `small.en` / `medium.en` |
-| `BACKFILL_HOURS` | `24` | history to fetch; raise it later and the gap is filled on restart |
+| `BACKFILL_HOURS` | `24` | history to load in the background on first start; `0` = live only. More can be loaded from the dashboard. |
 | `CHANNELS` | the five above | `talkgroup:agency:city-hint,…` |
 | `KEEP_AUDIO` | `true` | keep dispatch clips (about 100 KB each) in `/data/audio` |
 | `INCIDENT_WINDOW_MIN` | `20` | transmissions merge into one incident within this window |

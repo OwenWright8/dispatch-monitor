@@ -152,6 +152,16 @@ def _dist_m(a: tuple[float, float], b: tuple[float, float]) -> float:
     return math.hypot(dx, dy)
 
 
+def _seed_from_bundle(rel: str, dest: Path):
+    """Copy data baked into the image into the data volume on first start."""
+    src = config.BUNDLE_DIR / rel
+    if not dest.exists() and src.exists():
+        import shutil
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        log.info(f"Using bundled {rel}")
+
+
 # ─────────────────────────────────────────────
 # TIGER index
 # ─────────────────────────────────────────────
@@ -168,6 +178,7 @@ class TigerIndex:
     @classmethod
     def load(cls, tiger_dir: Path) -> "TigerIndex | None":
         cache = tiger_dir / f"index-{config.TIGER_YEAR}.pkl"
+        _seed_from_bundle(f"tiger/{cache.name}", cache)
         if cache.exists():
             try:
                 with open(cache, "rb") as f:
@@ -427,6 +438,7 @@ class Gazetteer:
 
     def __init__(self, path: Path):
         self.path = path
+        _seed_from_bundle("places.json", path)
         self.places: list[tuple[str, float, float, list[str]]] = []   # name, lat, lon, tokens
         self.by_name: dict[str, tuple[float, float]] = {}
         self._last_try = 0.0

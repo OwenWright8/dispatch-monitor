@@ -31,6 +31,7 @@ PRECISION_RANK = {"address": 4, "intersection": 3, "place": 2, "street": 1, None
 status = {
     "last_poll": None, "last_poll_error": None, "llm_ok": None, "llm_error": None,
     "last_processed": None, "started": time.time(),
+    "backfill": {"running": False, "hours": 0, "queued": 0, "error": None},
 }
 
 _geocoder: Geocoder | None = None
@@ -46,26 +47,27 @@ def geocoder() -> Geocoder:
 # ─────────────────────────────────────────────
 # Poller
 # ─────────────────────────────────────────────
-def _insert(calls: list[dict]) -> int:
+def _insert(calls: list[dict], min_ms: int = 0) -> int:
     c = db.conn()
     n = 0
     for call in calls:
         tg = call.get("talkgroupNum")
         ch = config.CHANNELS.get(tg)
-        if ch is None:
+        t_ms = openmhz.to_ms(call["time"])
+        if ch is None or t_ms < min_ms:
             continue
         cur = c.execute(
             "INSERT OR IGNORE INTO transmissions(id, talkgroup, agency, time_ms, len_s, url, status) "
             "VALUES (?,?,?,?,?,?,?)",
-            (call["_id"], tg, ch.agency, openmhz.to_ms(call["time"]), call.get("len"), call.get("url"),
+            (call["_id"], tg, ch.agency, t_ms, call.get("len"), call.get("url"),
              "pending" if (call.get("len") or 0) >= config.MIN_CALL_SECONDS else "short"))
         n += cur.rowcount
     return n
 
 
-def _page_down(start_batch: list[dict], floor_ms: int, max_pages: int = 2000) -> int:
-    """Insert start_batch, then page older until reaching floor_ms."""
-    added = _insert(start_batch)
+def _page_down(start_batch: list[dict], floor_ms: int, min_ms: int = 0, max_pages: int = 2000) -> int:
+    """Insert start_batch, then page older until reaching floor_ms (skipping calls before min_ms)."""
+    added = _insert(start_batch, min_ms)
     batch = start_batch
     for _ in range(max_pages):
         if not batch:
@@ -75,7 +77,7 @@ def _page_down(start_batch: list[dict], floor_ms: int, max_pages: int = 2000) ->
             break
         time.sleep(1.0)          # be polite to a free community service
         batch = openmhz.older(oldest)
-        added += _insert(batch)
+        added += _insert(batch, min_ms)
     return added
 
 
@@ -83,38 +85,66 @@ def poll_once():
     c = db.conn()
     newest = c.execute("SELECT MAX(time_ms) FROM transmissions").fetchone()[0]
     now_ms = int(time.time() * 1000)
-    floor = newest if newest else now_ms - int(config.BACKFILL_HOURS * 3600_000)
-    added = _page_down(openmhz.latest(), floor)
+    if newest:
+        added = _page_down(openmhz.latest(), newest)      # fills any gap since the last poll
+    else:                                                 # fresh install: live only; history is backfill's job
+        recent = now_ms - 15 * 60_000
+        added = _insert(openmhz.latest(), min_ms=recent)
     status["last_poll"] = time.time()
     status["last_poll_error"] = None
     if added:
         log.info(f"Queued {added} new transmission(s)")
 
 
-def extend_history():
-    """If BACKFILL_HOURS reaches further back than what we hold, fetch the rest."""
-    c = db.conn()
-    oldest = c.execute("SELECT MIN(time_ms) FROM transmissions").fetchone()[0]
-    if not oldest:
-        return
-    floor = int(time.time() * 1000) - int(config.BACKFILL_HOURS * 3600_000)
-    if oldest - floor > 3600_000 and db.get_state("history_exhausted_ms") != str(oldest):
-        log.info(f"Backfilling history back to {datetime.fromtimestamp(floor / 1000)}")
-        batch = openmhz.older(oldest)
-        if not batch:
-            db.set_state("history_exhausted_ms", oldest)   # OpenMHz retention reached
-            return
-        n = _page_down(batch, floor)
-        log.info(f"Backfill queued {n} transmission(s)")
+_backfill_lock = threading.Lock()
+
+
+def backfill(hours: float, _locked: bool = False) -> int:
+    """Queue every transmission from the last `hours` that we don't have yet.
+
+    Runs beside the live poller, and the worker always takes the newest clip
+    first, so live calls never wait behind history."""
+    if not _locked and not _backfill_lock.acquire(blocking=False):
+        return 0                                   # one at a time
+    b = status["backfill"]
+    try:
+        floor = int((time.time() - hours * 3600) * 1000)
+        b.update(running=True, hours=hours, queued=0, error=None)
+        oldest = db.conn().execute("SELECT MIN(time_ms) FROM transmissions").fetchone()[0]
+        start = oldest or int(time.time() * 1000)
+        if start <= floor:
+            return 0                               # already have that much history
+        log.info(f"Backfilling the last {hours:g} h (back to {datetime.fromtimestamp(floor / 1000):%Y-%m-%d %H:%M})")
+        n = _page_down(openmhz.older(start), floor, min_ms=floor)
+        b["queued"] = n
+        log.info(f"Backfill queued {n} transmission(s); live calls are still processed first")
+        return n
+    except Exception as e:
+        b["error"] = str(e)[:300]
+        log.error(f"Backfill failed: {e}")
+        return 0
+    finally:
+        b["running"] = False
+        _backfill_lock.release()
+
+
+def start_backfill(hours: float) -> bool:
+    """Start a backfill in the background; False if one is already running."""
+    if not _backfill_lock.acquire(blocking=False):
+        return False
+    status["backfill"]["running"] = True
+    threading.Thread(target=backfill, args=(hours, True), name="backfill", daemon=True).start()
+    return True
 
 
 def poller_loop(stop: threading.Event):
     try:
         poll_once()
-        extend_history()
     except Exception as e:
         log.error(f"Initial poll failed: {e}")
         status["last_poll_error"] = str(e)
+    if config.BACKFILL_HOURS > 0:
+        start_backfill(config.BACKFILL_HOURS)     # in its own thread; polling continues
     while not stop.wait(config.POLL_INTERVAL_S):
         try:
             poll_once()
@@ -202,10 +232,26 @@ def attach(time_ms: int, agency: str, fields: dict, geo: GeoResult | None, metho
 # Worker
 # ─────────────────────────────────────────────
 _llm_warned = 0.0
+_llm_last_prepare = 0.0
+
+
+def _set_llm_status(msg: str):
+    status["llm_ok"], status["llm_error"] = False, msg
+
+
+def _prepare_llm(wait_s: int = 0):
+    """Wait for Ollama and download the model if needed (shown in the dashboard header)."""
+    global _llm_last_prepare
+    _llm_last_prepare = time.time()
+    if extract.ensure_model(wait_s=wait_s, on_status=_set_llm_status):
+        status["llm_ok"], status["llm_error"] = None, None   # becomes True on the first successful call
 
 
 def _extract(transcript: str) -> tuple[dict, str]:
     global _llm_warned
+    # Ollama was down or the model missing: try again every 10 minutes.
+    if status["llm_ok"] is False and time.time() - _llm_last_prepare > 600:
+        _prepare_llm()
     try:
         fields, method = extract.extract(transcript, use_llm=True)
         if method == "llm":
@@ -266,7 +312,7 @@ def worker_loop(stop: threading.Event):
     c = db.conn()
     geocoder()    # build/load street index up front
     if config.LLM_ENABLED:
-        status["llm_ok"] = extract.ensure_model() or None
+        _prepare_llm(wait_s=300)
     while not stop.is_set():
         tx = c.execute("SELECT * FROM transmissions WHERE status='pending' AND attempts < 4 "
                        "ORDER BY time_ms DESC LIMIT 1").fetchone()

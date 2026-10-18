@@ -77,6 +77,8 @@ input[type=search] { width: 200px; }
 .active-filters { display: flex; gap: 6px; flex-wrap: wrap; }
 .tag { font-size: 12px; background: var(--surface-2); border-radius: 6px; padding: 2px 4px 2px 8px; display: inline-flex; gap: 4px; align-items: center; }
 .tag button { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 0 4px; }
+.backfill { display: inline-flex; gap: 6px; align-items: center; }
+button.btn:disabled { opacity: .55; cursor: default; }
 a.btn, button.btn { border: 1px solid var(--grid); background: var(--surface); border-radius: 7px; padding: 4px 10px; font-size: 13px; cursor: pointer; text-decoration: none; color: var(--ink-2); }
 
 /* views */
@@ -213,6 +215,10 @@ tr.click { cursor: pointer; } tr.click:hover td { background: var(--surface-2); 
   </div>
   <span class="pill" id="statusPill"><span class="dot"></span><span id="statusText">Connecting…</span></span>
   <span class="sub" id="pipelineText"></span>
+  <span class="backfill">
+    <select id="bfHours" aria-label="How far back"><option value="24">24 h</option><option value="72">3 days</option><option value="168">7 days</option></select>
+    <button class="btn" id="bfBtn" title="Fetch and transcribe past calls. Live calls are always handled first.">Load past calls</button>
+  </span>
   <div class="spacer"></div>
   <a class="btn" id="csvBtn" href="#" download>Export CSV</a>
   <div class="tabs" role="tablist">
@@ -711,10 +717,16 @@ async function loadStatus() {
     document.getElementById("statusPill").className = "pill " + (fresh ? "live" : "stale");
     document.getElementById("statusText").textContent = fresh ? "Live" : (s.last_poll_error ? "Feed error" : "Waiting for feed");
     document.getElementById("statusPill").title = s.last_poll_error || "";
-    const llm = !s.llm.enabled ? "rules only" : s.llm.ok === false ? `LLM offline (rules fallback)` : s.llm.model;
+    const llm = !s.llm.enabled ? "rules only"
+      : (s.llm.error || "").startsWith("Downloading") ? `${s.llm.error}…`
+      : s.llm.ok === false ? `AI model offline (keyword rules)` : s.llm.model;
     document.getElementById("pipelineText").textContent =
       `${s.queue ? `${fmtN(s.queue)} clips queued · ` : ""}${fmtN(s.incidents)} incidents · ${llm}`;
     document.getElementById("pipelineText").title = s.llm.error || "";
+    const bf = s.backfill || {}, btn = document.getElementById("bfBtn");
+    btn.disabled = !!bf.running;
+    btn.textContent = bf.running ? "Fetching past calls…" : "Load past calls";
+    btn.title = bf.error ? `Last backfill failed: ${bf.error}` : "Fetch and transcribe past calls. Live calls are always handled first.";
   } catch { document.getElementById("statusPill").className = "pill stale"; document.getElementById("statusText").textContent = "Server unreachable"; }
 }
 
@@ -731,6 +743,13 @@ async function refresh() {
   } catch (e) { console.warn(e); }
 }
 function renderAll() { if (view === "mapView") { renderFeed(); renderMap(); } else if (lastStats) renderStats(lastStats); }
+
+document.getElementById("bfBtn").addEventListener("click", async () => {
+  const h = document.getElementById("bfHours").value;
+  document.getElementById("bfBtn").disabled = true;
+  try { await fetch(`api/backfill?hours=${h}`, { method: "POST" }); } catch {}
+  loadStatus();
+});
 
 (async function init() {
   try {

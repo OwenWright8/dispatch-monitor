@@ -117,8 +117,16 @@ def status():
         "last_processed": s["last_processed"],
         "llm": {"enabled": config.LLM_ENABLED, "model": config.OLLAMA_MODEL, "ok": s["llm_ok"], "error": s["llm_error"]},
         "whisper_model": config.WHISPER_MODEL,
+        "backfill": s["backfill"],
         "now": time.time(),
     }
+
+
+@app.post("/api/backfill")
+def backfill(hours: float = Query(24, gt=0, le=24 * 31)):
+    """Fetch and process past calls. Live calls keep priority over the backfill."""
+    started = pipeline.start_backfill(hours)
+    return {"started": started, "backfill": pipeline.status["backfill"]}
 
 
 @app.get("/api/incidents")
