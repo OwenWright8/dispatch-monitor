@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tippecanoe Dispatch Monitor</title>
+<link rel="stylesheet" href="lib/leaflet.css">
+<script src="lib/leaflet.js"></script>
+<script src="lib/leaflet-heat.js"></script>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f3f2ee;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,.10);
+  --accent: #2a78d6; --live: #0ca30c; --stale: #d03b3b;
+  --c-medical: #2a78d6; --c-fire: #eb6834; --c-alarm: #1baf7a; --c-traffic: #eda100;
+  --c-hazmat: #e87ba4; --c-rescue: #008300; --c-service: #6250d6; --c-other: #a3a29c;
+  --seq-0: #f0efec; --seq-1: #cde2fb; --seq-2: #9ec5f4; --seq-3: #6da7ec; --seq-4: #3987e5; --seq-5: #256abf; --seq-6: #184f95; --seq-7: #0d366b;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,.10);
+    --accent: #3987e5;
+    --c-medical: #3987e5; --c-fire: #d95926; --c-alarm: #199e70; --c-traffic: #c98500;
+    --c-hazmat: #d55181; --c-rescue: #008300; --c-service: #9085e9; --c-other: #6b6a65;
+    --seq-0: #262624; --seq-1: #104281; --seq-2: #184f95; --seq-3: #1c5cab; --seq-4: #256abf; --seq-5: #3987e5; --seq-6: #6da7ec; --seq-7: #b7d3f6;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,.10);
+  --accent: #3987e5;
+  --c-medical: #3987e5; --c-fire: #d95926; --c-alarm: #199e70; --c-traffic: #c98500;
+  --c-hazmat: #d55181; --c-rescue: #008300; --c-service: #9085e9; --c-other: #6b6a65;
+  --seq-0: #262624; --seq-1: #104281; --seq-2: #184f95; --seq-3: #1c5cab; --seq-4: #256abf; --seq-5: #3987e5; --seq-6: #6da7ec; --seq-7: #b7d3f6;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body { background: var(--page); color: var(--ink); font: 14px/1.4 var(--sans); display: flex; flex-direction: column; overflow: hidden; overflow-x: hidden; }
+button, select, input { font: inherit; color: inherit; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* header */
+header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--grid); flex-wrap: wrap; }
+h1 { font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
+.sub { color: var(--ink-2); font-size: 12px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--grid); color: var(--ink-2); }
+.pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.pill.live .dot { background: var(--live); }
+.pill.stale .dot { background: var(--stale); }
+.spacer { flex: 1; }
+.tabs { display: flex; gap: 2px; background: var(--surface-2); padding: 3px; border-radius: 8px; }
+.tabs button { border: 0; background: transparent; padding: 5px 14px; border-radius: 6px; cursor: pointer; color: var(--ink-2); }
+.tabs button.on { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--ring); font-weight: 600; }
+
+/* filters: one row above everything */
+.filters { display: flex; gap: 8px; align-items: center; padding: 8px 16px; background: var(--surface); border-bottom: 1px solid var(--grid); flex-wrap: wrap; }
+.seg { display: inline-flex; border: 1px solid var(--grid); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; background: transparent; padding: 4px 10px; cursor: pointer; color: var(--ink-2); font-size: 13px; }
+.seg button + button { border-left: 1px solid var(--grid); }
+.seg button.on { background: var(--surface-2); color: var(--ink); font-weight: 600; }
+.chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--grid); background: transparent; padding: 3px 8px; border-radius: 999px; cursor: pointer; font-size: 13px; color: var(--ink-2); }
+.chip .sw { width: 9px; height: 9px; border-radius: 50%; }
+.chip.on { color: var(--ink); background: var(--surface-2); border-color: var(--axis); font-weight: 600; }
+.chip.off { opacity: .45; }
+select, input[type=search] { border: 1px solid var(--grid); background: var(--surface); border-radius: 7px; padding: 4px 8px; font-size: 13px; }
+input[type=search] { width: 200px; }
+.toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+.active-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+.tag { font-size: 12px; background: var(--surface-2); border-radius: 6px; padding: 2px 4px 2px 8px; display: inline-flex; gap: 4px; align-items: center; }
+.tag button { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 0 4px; }
+.backfill { display: inline-flex; gap: 6px; align-items: center; }
+button.btn:disabled { opacity: .55; cursor: default; }
+a.btn, button.btn { border: 1px solid var(--grid); background: var(--surface); border-radius: 7px; padding: 4px 10px; font-size: 13px; cursor: pointer; text-decoration: none; color: var(--ink-2); }
+
+/* views */
+main { flex: 1; min-height: 0; display: flex; }
+.view { display: none; flex: 1; min-height: 0; }
+.view.on { display: flex; }
+
+/* map view */
+#mapView { flex-direction: row; }
+.feed { width: 360px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--surface); border-right: 1px solid var(--grid); min-height: 0; }
+.feed-head { padding: 10px 14px; display: flex; justify-content: space-between; color: var(--ink-2); font-size: 12px; border-bottom: 1px solid var(--grid); }
+.feed-list { overflow-y: auto; flex: 1; }
+.item { display: flex; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--grid); cursor: pointer; }
+.item:hover { background: var(--surface-2); }
+.item .sw { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; box-shadow: 0 0 0 2px var(--surface); }
+.item .sw.approx { background: transparent !important; border: 2px solid; }
+.item .t1 { font-weight: 600; }
+.item .t2 { color: var(--ink-2); font-size: 13px; }
+.item .t3 { color: var(--muted); font-size: 12px; }
+.item .body { min-width: 0; flex: 1; }
+.item .body > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mapwrap { flex: 1; position: relative; min-width: 0; }
+#map { position: absolute; inset: 0; background: var(--surface-2); }
+.map-ctl { position: absolute; top: 10px; right: 10px; z-index: 500; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.map-ctl .seg { background: var(--surface); box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+.legend { background: var(--surface); border-radius: 8px; padding: 8px 10px; box-shadow: 0 1px 4px rgba(0,0,0,.15); font-size: 12px; display: grid; gap: 3px; }
+.legend div { display: flex; align-items: center; gap: 6px; color: var(--ink-2); }
+.legend .sw { width: 9px; height: 9px; border-radius: 50%; }
+.empty { padding: 32px 16px; color: var(--muted); text-align: center; }
+
+/* stats view */
+#statsView { overflow-y: auto; display: none; }
+#statsView.on { display: block; }
+.stats { max-width: 1280px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; grid-template-columns: repeat(12, minmax(0, 1fr)); }
+.card { background: var(--surface); border-radius: 10px; box-shadow: 0 0 0 1px var(--ring); padding: 14px 16px; min-width: 0; }
+.card h2 { font-size: 14px; font-weight: 600; }
+.card .hint { color: var(--muted); font-size: 12px; margin: 2px 0 10px; }
+.span-12 { grid-column: span 12; } .span-8 { grid-column: span 8; } .span-6 { grid-column: span 6; } .span-4 { grid-column: span 4; }
+.tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; }
+.tile .label { color: var(--ink-2); font-size: 13px; }
+.tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+.tile .note { color: var(--muted); font-size: 12px; }
+.hero .value { font-size: 48px; line-height: 1.05; }
+
+.bars { display: grid; gap: 6px; }
+.bar { display: grid; grid-template-columns: minmax(90px, 160px) minmax(0, 1fr) 40px; align-items: center; gap: 8px; cursor: pointer; border-radius: 4px; padding: 1px 0; }
+.bar:hover { background: var(--surface-2); }
+.bar .lbl { font-size: 13px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
+.bar .lbl .sw { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.bar .track { height: 14px; }
+.bar .fill { height: 14px; border-radius: 0 4px 4px 0; min-width: 2px; }
+.bar .val { font-size: 13px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+.bar.sel .lbl { color: var(--ink); font-weight: 600; }
+
+svg text { fill: var(--muted); font: 11px var(--sans); font-variant-numeric: tabular-nums; }
+svg .gridline { stroke: var(--grid); stroke-width: 1; }
+svg .baseline { stroke: var(--axis); stroke-width: 1; }
+
+.hm { display: grid; grid-template-columns: 36px repeat(24, minmax(0, 1fr)); gap: 2px; font-size: 11px; color: var(--muted); }
+.hm .cell { aspect-ratio: 1.6; border-radius: 3px; cursor: pointer; min-height: 12px; }
+.hm .cell:hover { box-shadow: 0 0 0 2px var(--ink); }
+.hm .cell.sel { box-shadow: 0 0 0 2px var(--accent); }
+.hm .rl { display: flex; align-items: center; cursor: pointer; }
+.hm .cl { text-align: center; cursor: pointer; }
+.hm .rl:hover, .hm .cl:hover { color: var(--ink); }
+.scale { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 11px; color: var(--muted); }
+.scale .ramp { display: flex; gap: 2px; }
+.scale .ramp span { width: 18px; height: 10px; border-radius: 2px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 4px 6px; border-bottom: 1px solid var(--grid); }
+td { padding: 6px; border-bottom: 1px solid var(--grid); }
+td.n { text-align: right; font-variant-numeric: tabular-nums; }
+tr.click { cursor: pointer; } tr.click:hover td { background: var(--surface-2); }
+.dots { display: inline-flex; gap: 3px; }
+.dots span { width: 8px; height: 8px; border-radius: 50%; }
+
+.legend-row { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); margin-bottom: 8px; }
+.legend-row span { display: inline-flex; align-items: center; gap: 5px; }
+.legend-row i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+#tip { position: fixed; pointer-events: none; z-index: 3000; background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--ring), 0 4px 16px rgba(0,0,0,.18); border-radius: 8px; padding: 7px 10px; font-size: 12px; display: none; max-width: 260px; }
+#tip b { font-weight: 600; }
+#tip .m { color: var(--ink-2); }
+
+/* modal */
+.backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 2000; display: none; align-items: center; justify-content: center; padding: 16px; }
+.backdrop.open { display: flex; }
+.modal { background: var(--surface); border-radius: 12px; width: 560px; max-width: 100%; max-height: 88vh; overflow-y: auto; padding: 20px 22px; position: relative; }
+.modal .x { position: absolute; right: 12px; top: 10px; border: 0; background: none; font-size: 20px; cursor: pointer; color: var(--muted); }
+.modal h3 { font-size: 18px; display: flex; gap: 8px; align-items: center; }
+.modal h3 .sw { width: 12px; height: 12px; border-radius: 50%; }
+.modal .meta { color: var(--ink-2); margin: 2px 0 14px; font-size: 13px; }
+.kv { display: grid; grid-template-columns: 110px 1fr; gap: 6px 12px; font-size: 13px; margin-bottom: 14px; }
+.kv dt { color: var(--muted); }
+.tx { border-top: 1px solid var(--grid); padding: 10px 0; }
+.tx .h { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.tx p { font-size: 13px; color: var(--ink-2); }
+.tx audio { width: 100%; height: 32px; margin-top: 6px; }
+.prec { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--surface-2); color: var(--ink-2); margin-left: 6px; }
+
+.leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--surface); color: var(--ink); }
+.leaflet-container { font: 13px var(--sans); }
+.heat-scale { display: flex; align-items: center; gap: 6px; }
+.heat-scale i { display: block; width: 90px; height: 8px; border-radius: 4px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .osm .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.85) saturate(.6); } }
+:root[data-theme="dark"] .osm .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.85) saturate(.6); }
+
+@media (max-width: 900px) {
+  body { overflow: auto; }
+  main { min-height: auto; }
+  #mapView { flex-direction: column-reverse; }
+  .feed { width: 100%; border-right: 0; max-height: 50vh; }
+  .mapwrap { height: 55vh; flex: none; }
+  .span-8, .span-6, .span-4 { grid-column: span 12; }
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hero .value { font-size: 36px; }
+  input[type=search] { width: 100%; }
+  .stats { padding: 16px 16px; }
+  .hm { grid-template-columns: 30px repeat(24, minmax(0, 1fr)); gap: 1px; }
+  .hm .cell { min-height: 10px; }
+  .bar { grid-template-columns: minmax(80px, 120px) minmax(0, 1fr) 36px; }
+  header .spacer { display: none; }
+  #statsView { overflow-x: hidden; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Tippecanoe Dispatch Monitor</h1>
+    <div class="sub" id="channelsLine">Fire &amp; EMS dispatch · Lafayette · West Lafayette · Purdue</div>
+  </div>
+  <span class="pill" id="statusPill"><span class="dot"></span><span id="statusText">Connecting…</span></span>
+  <span class="sub" id="pipelineText"></span>
+  <span class="backfill">
+    <select id="bfHours" aria-label="How far back"><option value="24">24 h</option><option value="72">3 days</option><option value="168">7 days</option></select>
+    <button class="btn" id="bfBtn" title="Fetch and transcribe past calls. Live calls are always handled first.">Load past calls</button>
+  </span>
+  <div class="spacer"></div>
+  <a class="btn" id="csvBtn" href="#" download>Export CSV</a>
+  <div class="tabs" role="tablist">
+    <button class="on" data-view="mapView" role="tab">Map</button>
+    <button data-view="statsView" role="tab">Statistics</button>
+  </div>
+</header>
+
+<div class="filters">
+  <div class="seg" id="rangeSeg">
+    <button data-days="1">24h</button><button data-days="7">7d</button><button data-days="30" class="on">30d</button>
+    <button data-days="90">90d</button><button data-days="365">1y</button><button data-days="0">All</button>
+  </div>
+  <div id="catChips" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+  <select id="agencySel"><option value="">All agencies</option></select>
+  <input type="search" id="q" placeholder="Search address, unit, type…">
+  <label class="toggle"><input type="checkbox" id="bboxToggle"> Only map area</label>
+  <div class="active-filters" id="activeFilters"></div>
+</div>
+
+<main>
+  <section class="view on" id="mapView">
+    <aside class="feed">
+      <div class="feed-head"><span>Incidents</span><span class="num" id="feedCount">0</span></div>
+      <div class="feed-list" id="feed"><div class="empty">Loading…</div></div>
+    </aside>
+    <div class="mapwrap">
+      <div id="map"></div>
+      <div class="map-ctl">
+        <div class="seg" id="modeSeg"><button data-mode="heat" class="on">Heatmap</button><button data-mode="dots">Incidents</button></div>
+        <div class="legend" id="mapLegend"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="statsView">
+    <div class="stats">
+      <div class="card span-12"><div class="tiles" id="tiles"></div></div>
+
+      <div class="card span-8">
+        <h2>Incidents per day</h2>
+        <div class="hint" id="dailyHint">Local time</div>
+        <div id="daily"></div>
+      </div>
+      <div class="card span-4">
+        <h2>By category</h2>
+        <div class="hint">Click a bar to filter</div>
+        <div class="bars" id="byCat"></div>
+      </div>
+
+      <div class="card span-8">
+        <h2>When calls happen</h2>
+        <div class="hint">Incidents by weekday and hour. Click a cell, row, or column to filter everything to it.</div>
+        <div id="hourDow"></div>
+      </div>
+      <div class="card span-4">
+        <h2>Most common call types</h2>
+        <div class="hint">Click to filter</div>
+        <div class="bars" id="byNature"></div>
+      </div>
+
+      <div class="card span-12">
+        <h2>Hour of day by category</h2>
+        <div class="hint">Which kinds of calls dominate at which times</div>
+        <div class="legend-row" id="hourCatLegend"></div>
+        <div id="hourCat"></div>
+      </div>
+
+      <div class="card span-6">
+        <h2>Repeat locations</h2>
+        <div class="hint">Addresses with more than one incident. Click to show on the map.</div>
+        <div id="topLoc"></div>
+      </div>
+      <div class="card span-6">
+        <h2>By ZIP code</h2>
+        <div class="hint">Mapped incidents only</div>
+        <div class="bars" id="byZip"></div>
+        <h2 style="margin-top:18px">By agency</h2>
+        <div class="hint">An incident dispatched to two agencies counts for both</div>
+        <div class="bars" id="byAgency"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="backdrop" id="modal"><div class="modal" id="modalBody"></div></div>
+<div id="tip"></div>
+
+<script>
+// ─────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────
+const CATS = ["Medical", "Fire", "Alarm", "Traffic", "Hazmat", "Rescue", "Service", "Other"];
+const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const F = { days: 30, cats: new Set(), agency: "", q: "", hours: new Set(), dows: new Set(), natures: new Set(), bbox: false };
+let mode = "heat", view = "mapView", incidents = [], lastIds = "";
+
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const catColor = c => css("--c-" + (c || "other").toLowerCase()) || css("--c-other");
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtN = n => n >= 10000 ? (n / 1000).toFixed(1).replace(/\.0$/, "") + "K" : n.toLocaleString();
+
+function qs(extra = {}) {
+  const p = new URLSearchParams();
+  p.set("days", F.days);
+  if (F.cats.size) p.set("category", [...F.cats].join(","));
+  if (F.natures.size) p.set("nature", [...F.natures].join(","));
+  if (F.agency) p.set("agency", F.agency);
+  if (F.q) p.set("q", F.q);
+  if (F.hours.size) p.set("hours", [...F.hours].join(","));
+  if (F.dows.size) p.set("dows", [...F.dows].join(","));
+  if (F.bbox) { const b = map.getBounds(); p.set("bbox", [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map(x => x.toFixed(5)).join(",")); }
+  for (const [k, v] of Object.entries(extra)) p.set(k, v);
+  return p.toString();
+}
+const api = (path, extra) => fetch(`api/${path}?${qs(extra)}`).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+
+// ─────────────────────────────────────────────
+// Filters UI
+// ─────────────────────────────────────────────
+function buildCatChips() {
+  document.getElementById("catChips").innerHTML = CATS.map(c => {
+    const st = F.cats.size === 0 ? "" : F.cats.has(c) ? "on" : "off";
+    return `<button class="chip ${st}" data-cat="${c}"><span class="sw" style="background:${catColor(c)}"></span>${c}</button>`;
+  }).join("");
+}
+document.getElementById("catChips").addEventListener("click", e => {
+  const b = e.target.closest("[data-cat]"); if (!b) return;
+  toggleSet(F.cats, b.dataset.cat); buildCatChips(); refresh();
+});
+document.getElementById("rangeSeg").addEventListener("click", e => {
+  const b = e.target.closest("[data-days]"); if (!b) return;
+  F.days = +b.dataset.days;
+  document.querySelectorAll("#rangeSeg button").forEach(x => x.classList.toggle("on", x === b));
+  refresh();
+});
+document.getElementById("agencySel").addEventListener("change", e => { F.agency = e.target.value; refresh(); });
+let qTimer;
+document.getElementById("q").addEventListener("input", e => { clearTimeout(qTimer); qTimer = setTimeout(() => { F.q = e.target.value.trim(); refresh(); }, 300); });
+document.getElementById("bboxToggle").addEventListener("change", e => { F.bbox = e.target.checked; refresh(); });
+
+function toggleSet(s, v) { s.has(v) ? s.delete(v) : s.add(v); }
+
+function renderActiveFilters() {
+  const tags = [];
+  if (F.dows.size) tags.push(["dows", [...F.dows].sort().map(d => DOW[d]).join(", ")]);
+  if (F.hours.size) tags.push(["hours", [...F.hours].sort((a, b) => a - b).map(h => `${h}:00`).join(", ")]);
+  if (F.natures.size) tags.push(["natures", [...F.natures].join(", ")]);
+  document.getElementById("activeFilters").innerHTML = tags.map(([k, label]) =>
+    `<span class="tag">${esc(label)}<button data-clear="${k}" aria-label="Clear">×</button></span>`).join("");
+}
+document.getElementById("activeFilters").addEventListener("click", e => {
+  const b = e.target.closest("[data-clear]"); if (!b) return;
+  F[b.dataset.clear].clear(); refresh();
+});
+
+document.querySelector(".tabs").addEventListener("click", e => {
+  const b = e.target.closest("[data-view]"); if (!b) return;
+  view = b.dataset.view;
+  history.replaceState(null, "", view === "statsView" ? "#stats" : "#map");
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === view));
+  if (view === "mapView") setTimeout(() => map.invalidateSize(), 0);
+  refresh();
+});
+
+// ─────────────────────────────────────────────
+// Map
+// ─────────────────────────────────────────────
+const map = L.map("map", { center: [40.4167, -86.8753], zoom: 12, preferCanvas: true });
+// CARTO basemaps when CARTO_API_KEY is configured (dark/light follow the theme);
+// otherwise standard OSM tiles, inverted in CSS for dark mode (.osm .leaflet-tile-pane).
+const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+const isDark = () => document.documentElement.dataset.theme === "dark" ||
+  (document.documentElement.dataset.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+let tiles = null, cartoKey = null;
+function setBasemap() {
+  if (tiles) map.removeLayer(tiles);
+  map.getContainer().classList.toggle("osm", !cartoKey);
+  tiles = cartoKey
+    ? L.tileLayer(`https://{s}.basemaps.cartocdn.com/${isDark() ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png?key=${encodeURIComponent(cartoKey)}`,
+        { attribution: OSM_ATTR + ' &copy; <a href="https://carto.com/attributions">CARTO</a>', subdomains: "abcd", maxZoom: 19 })
+    : L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: OSM_ATTR, maxZoom: 19 });
+  tiles.addTo(map);
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { setBasemap(); buildCatChips(); renderAll(); });
+
+// Semantic heat ramp (blue → amber → red); always shown with a scale in the legend.
+const HEAT = { .2: "#3987e5", .5: "#1baf7a", .7: "#eda100", .85: "#eb6834", 1: "#e34948" };
+let heat = null; const dots = L.layerGroup().addTo(map);
+document.getElementById("modeSeg").addEventListener("click", e => {
+  const b = e.target.closest("[data-mode]"); if (!b) return;
+  mode = b.dataset.mode;
+  document.querySelectorAll("#modeSeg button").forEach(x => x.classList.toggle("on", x === b));
+  renderMap();
+});
+map.on("moveend", () => { if (F.bbox) refresh(); });
+
+function renderMap() {
+  if (heat) { map.removeLayer(heat); heat = null; }
+  dots.clearLayers();
+  const pts = incidents.filter(i => i.lat != null);
+  const legend = document.getElementById("mapLegend");
+  if (mode === "heat") {
+    heat = L.heatLayer(pts.map(i => [i.lat, i.lon, 1]), {
+      radius: 22, blur: 18, maxZoom: 15, minOpacity: .35, gradient: HEAT,
+    }).addTo(map);
+    legend.innerHTML = `<div style="font-weight:600;color:var(--ink)">Call density</div>
+      <div class="heat-scale"><span>Fewer</span><i style="background:linear-gradient(90deg,${Object.values(HEAT).join(",")})"></i><span>More</span></div>
+      <div>${fmtN(pts.length)} mapped incidents</div>`;
+  } else {
+    // newest last so they draw on top
+    for (const i of [...pts].reverse()) {
+      const approx = i.precision === "street";
+      const m = L.circleMarker([i.lat, i.lon], {
+        radius: 6, weight: 2, color: approx ? catColor(i.category) : css("--surface"),
+        fillColor: catColor(i.category), fillOpacity: approx ? .25 : .95,
+      });
+      m.on("mouseover", ev => showTip(ev.originalEvent, `<b>${esc(i.nature)}</b><div class="m">${esc(i.matched || i.address || i.place)}</div><div class="m">${fmtTime(i.first_ms)}</div>`));
+      m.on("mouseout", hideTip);
+      m.on("click", () => openIncident(i.id));
+      dots.addLayer(m);
+    }
+    const present = CATS.filter(c => pts.some(i => i.category === c));
+    legend.innerHTML = present.map(c => `<div><span class="sw" style="background:${catColor(c)}"></span>${c}</div>`).join("")
+      + `<div style="margin-top:4px"><span class="sw" style="border:2px solid var(--muted)"></span>Approximate (street only)</div>`;
+  }
+}
+
+// ─────────────────────────────────────────────
+// Feed
+// ─────────────────────────────────────────────
+function fmtTime(ms) {
+  const d = new Date(ms), now = new Date();
+  const t = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return `Today ${t}`;
+  return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + t;
+}
+function relTime(ms) {
+  const s = (Date.now() - ms) / 1000;
+  if (s < 3600) return `${Math.max(1, Math.round(s / 60))} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return fmtTime(ms);
+}
+function renderFeed() {
+  document.getElementById("feedCount").textContent = fmtN(incidents.length);
+  const el = document.getElementById("feed");
+  if (!incidents.length) { el.innerHTML = `<div class="empty">No incidents match these filters yet.<br>New dispatches appear here within a minute.</div>`; return; }
+  el.innerHTML = incidents.slice(0, 300).map(i => {
+    const approx = i.lat == null || i.precision === "street";
+    const col = catColor(i.category);
+    return `<div class="item" data-id="${i.id}">
+      <span class="sw ${approx ? "approx" : ""}" style="background:${col};border-color:${col}" title="${i.lat == null ? "Not mapped" : approx ? "Approximate location" : "Mapped"}"></span>
+      <div class="body">
+        <div class="t1">${esc(i.nature)}</div>
+        <div class="t2">${esc(i.matched || i.address || i.place || "Unknown location")}${i.place && i.matched ? " · " + esc(i.place) : ""}</div>
+        ${i.summary ? `<div class="t3">${esc(i.summary)}</div>` : ""}
+        <div class="t3">${relTime(i.first_ms)} · ${esc(i.agencies.join(", "))}</div>
+      </div></div>`;
+  }).join("");
+}
+document.getElementById("feed").addEventListener("click", e => {
+  const it = e.target.closest("[data-id]"); if (it) openIncident(+it.dataset.id, true);
+});
+
+// ─────────────────────────────────────────────
+// Incident detail
+// ─────────────────────────────────────────────
+const PREC = { address: "exact address", intersection: "intersection", place: "named place", street: "street only (approximate)" };
+async function openIncident(id, fly) {
+  const r = await fetch(`api/incidents/${id}`); if (!r.ok) return;
+  const i = await r.json();
+  if (fly && i.lat != null) map.flyTo([i.lat, i.lon], 16, { duration: .6 });
+  const patient = [i.patient_age ? `${i.patient_age} y/o` : "", i.patient_sex || ""].filter(Boolean).join(" ");
+  document.getElementById("modalBody").innerHTML = `
+    <button class="x" aria-label="Close">×</button>
+    <h3><span class="sw" style="background:${catColor(i.category)}"></span>${esc(i.nature)}</h3>
+    <div class="meta">${esc(i.category)} · ${new Date(i.first_ms).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div>
+    <dl class="kv">
+      <dt>Location</dt><dd>${esc(i.matched || i.address || i.place || "Unknown")}${i.precision ? `<span class="prec">${PREC[i.precision] || i.precision}</span>` : `<span class="prec">not mapped</span>`}</dd>
+      ${i.place ? `<dt>Place</dt><dd>${esc(i.place)}</dd>` : ""}
+      ${i.address && i.matched && i.address !== i.matched ? `<dt>As heard</dt><dd>${esc(i.address)}</dd>` : ""}
+      ${i.summary ? `<dt>Summary</dt><dd>${esc(i.summary)}</dd>` : ""}
+      ${patient ? `<dt>Patient</dt><dd>${esc(patient)}</dd>` : ""}
+      <dt>Agencies</dt><dd>${esc(i.agencies.join(", "))}</dd>
+      ${i.units.length ? `<dt>Units</dt><dd>${esc(i.units.join(", "))}</dd>` : ""}
+      ${i.zip ? `<dt>ZIP</dt><dd>${esc(i.zip)}</dd>` : ""}
+    </dl>
+    ${(i.transmissions || []).map(t => `<div class="tx">
+      <div class="h">${esc(t.agency)} · ${new Date(t.time_ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} · ${t.len_s}s</div>
+      <p>${esc(t.transcript || "")}</p>
+      <audio controls preload="none" src="api/audio/${encodeURIComponent(t.id)}"></audio></div>`).join("")}
+    ${i.history && i.history.length ? `<div class="tx"><div class="h">Previous incidents at this address</div>
+      ${i.history.map(h => `<div style="font-size:13px;display:flex;gap:8px;align-items:center;padding:2px 0;cursor:pointer" data-hist="${h.id}">
+        <span class="sw" style="width:8px;height:8px;border-radius:50%;background:${catColor(h.category)}"></span>${esc(h.nature)}
+        <span style="color:var(--muted)">${fmtTime(h.first_ms)}</span></div>`).join("")}</div>` : ""}`;
+  document.getElementById("modal").classList.add("open");
+}
+document.getElementById("modal").addEventListener("click", e => {
+  if (e.target.id === "modal" || e.target.closest(".x")) closeModal();
+  const h = e.target.closest("[data-hist]"); if (h) openIncident(+h.dataset.hist);
+});
+function closeModal() {
+  document.getElementById("modal").classList.remove("open");
+  document.querySelectorAll("#modalBody audio").forEach(a => a.pause());
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+// ─────────────────────────────────────────────
+// Tooltip
+// ─────────────────────────────────────────────
+const tip = document.getElementById("tip");
+function showTip(ev, html) {
+  tip.innerHTML = html; tip.style.display = "block";
+  const x = Math.min(ev.clientX + 14, innerWidth - tip.offsetWidth - 8);
+  const y = ev.clientY + 14 + tip.offsetHeight > innerHeight ? ev.clientY - tip.offsetHeight - 10 : ev.clientY + 14;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+function hideTip() { tip.style.display = "none"; }
+document.addEventListener("mousemove", e => {
+  const t = e.target.closest("[data-tip]");
+  if (t) showTip(e, t.dataset.tip); else if (!e.target.closest(".leaflet-interactive")) hideTip();
+});
+
+// ─────────────────────────────────────────────
+// Stats
+// ─────────────────────────────────────────────
+function hBars(el, rows, opts = {}) {
+  const max = Math.max(1, ...rows.map(r => r.n));
+  el.innerHTML = rows.length ? rows.map(r => {
+    const col = opts.color ? opts.color(r) : css("--accent");
+    const sel = opts.selected && opts.selected(r);
+    return `<div class="bar ${sel ? "sel" : ""}" data-key="${esc(r.key)}" data-tip="<b>${esc(opts.label ? opts.label(r) : r.key)}</b><div class='m'>${r.n.toLocaleString()} incidents</div>">
+      <div class="lbl">${opts.swatch ? `<span class="sw" style="background:${col}"></span>` : ""}${esc(opts.label ? opts.label(r) : r.key)}</div>
+      <div class="track"><div class="fill" style="width:${(r.n / max * 100).toFixed(1)}%;background:${col}"></div></div>
+      <div class="val">${fmtN(r.n)}</div></div>`;
+  }).join("") : `<div class="empty">No data</div>`;
+}
+
+// Integer tick step from 1/2/5 x 10^k so axis labels are round counts.
+function niceStep(v, ticks = 4) {
+  const raw = Math.max(1, v / ticks), p = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 5, 10].map(m => m * p).find(s => s >= raw);
+}
+
+function columns(el, rows, opts) {
+  // rows: [{label, segs:[{key,n,color}], total, tip}]
+  const W = el.clientWidth || 600, H = opts.height || 180, padL = 34, padB = 22, padT = 8;
+  const n = rows.length; if (!n) { el.innerHTML = `<div class="empty">No data</div>`; return; }
+  const peak = Math.max(1, ...rows.map(r => r.total)), step = niceStep(peak), nT = Math.ceil(peak / step), max = step * nT;
+  const bw = (W - padL) / n, barW = Math.max(2, Math.min(24, bw - 2));
+  const y = v => padT + (H - padT - padB) * (1 - v / max);
+  let s = `<svg width="${W}" height="${H}" role="img" aria-label="${esc(opts.aria || "")}">`;
+  for (let k = 0; k <= nT; k++) {
+    const v = step * k, yy = y(v);
+    s += `<line class="${k ? "gridline" : "baseline"}" x1="${padL}" x2="${W}" y1="${yy}" y2="${yy}"/><text x="${padL - 6}" y="${yy + 4}" text-anchor="end">${fmtN(Math.round(v))}</text>`;
+  }
+  const every = Math.ceil(n / Math.floor((W - padL) / 44));
+  rows.forEach((r, i) => {
+    const x = padL + i * bw + (bw - barW) / 2;
+    let base = 0;
+    const segs = r.segs.filter(sg => sg.n > 0);
+    segs.forEach((sg, j) => {
+      const y1 = y(base + sg.n), y0 = y(base);
+      const top = j === segs.length - 1;
+      const h = Math.max(0, y0 - y1 - (j ? 2 : 0));        // 2px surface gap between stacked segments
+      const rad = top ? Math.min(4, h, barW / 2) : 0;
+      s += top && rad > 0
+        ? `<path d="M${x},${y0 - (j ? 2 : 0)} V${y1 + rad} Q${x},${y1} ${x + rad},${y1} H${x + barW - rad} Q${x + barW},${y1} ${x + barW},${y1 + rad} V${y0 - (j ? 2 : 0)} Z" fill="${sg.color}"/>`
+        : `<rect x="${x}" y="${y1}" width="${barW}" height="${h}" fill="${sg.color}"/>`;
+      base += sg.n;
+    });
+    s += `<rect x="${padL + i * bw}" y="${padT}" width="${bw}" height="${H - padT - padB}" fill="transparent" data-tip="${esc(r.tip)}" ${opts.onClick ? `data-col="${i}" style="cursor:pointer"` : ""}/>`;
+    if (i % every === 0) s += `<text x="${padL + i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${esc(r.label)}</text>`;
+  });
+  el.innerHTML = s + "</svg>";
+  if (opts.onClick) el.onclick = e => { const c = e.target.closest("[data-col]"); if (c) opts.onClick(+c.dataset.col); };
+}
+
+function renderHourDow(el, cells) {
+  const m = Array.from({ length: 7 }, () => Array(24).fill(0));
+  cells.forEach(c => m[c.dow][c.hour] = c.n);
+  const max = Math.max(1, ...m.flat());
+  const ramp = [1, 2, 3, 4, 5, 6, 7].map(k => css(`--seq-${k}`));
+  const color = v => v === 0 ? css("--seq-0") : ramp[Math.min(6, Math.floor(v / max * 6.999))];
+  const hl = h => h === 0 ? "12a" : h < 12 ? `${h}a` : h === 12 ? "12p" : `${h - 12}p`;
+  let s = `<div class="hm"><div></div>` + Array.from({ length: 24 }, (_, h) =>
+    `<div class="cl" data-hour="${h}" style="${F.hours.has(h) ? "color:var(--ink);font-weight:600" : ""}">${h % 3 === 0 ? hl(h) : ""}</div>`).join("");
+  for (let d = 0; d < 7; d++) {
+    s += `<div class="rl" data-dow="${d}" style="${F.dows.has(d) ? "color:var(--ink);font-weight:600" : ""}">${DOW[d]}</div>`;
+    for (let h = 0; h < 24; h++) {
+      const sel = F.dows.has(d) && F.hours.has(h);
+      s += `<div class="cell ${sel ? "sel" : ""}" style="background:${color(m[d][h])}" data-cell="${d},${h}"
+        data-tip="<b>${DOW[d]} ${hl(h)}–${hl((h + 1) % 24)}</b><div class='m'>${m[d][h]} incidents</div>"></div>`;
+    }
+  }
+  s += `</div><div class="scale"><span>0</span><span class="ramp">${[css("--seq-0"), ...ramp].map(c => `<span style="background:${c}"></span>`).join("")}</span><span>${max}</span>
+    <span style="margin-left:auto">Busiest: ${busiest(m, hl)}</span></div>`;
+  el.innerHTML = s;
+}
+function busiest(m, hl) {
+  let best = [0, 0, -1];
+  m.forEach((row, d) => row.forEach((v, h) => { if (v > best[2]) best = [d, h, v]; }));
+  return best[2] > 0 ? `${DOW[best[0]]} ${hl(best[1])} (${best[2]})` : "—";
+}
+document.getElementById("hourDow").addEventListener("click", e => {
+  const c = e.target.closest("[data-cell]"), r = e.target.closest("[data-dow]"), h = e.target.closest("[data-hour]");
+  if (c) {
+    const [d, hr] = c.dataset.cell.split(",").map(Number);
+    const same = F.dows.size === 1 && F.dows.has(d) && F.hours.size === 1 && F.hours.has(hr);
+    F.dows.clear(); F.hours.clear();
+    if (!same) { F.dows.add(d); F.hours.add(hr); }
+  } else if (r) toggleSet(F.dows, +r.dataset.dow);
+  else if (h) toggleSet(F.hours, +h.dataset.hour);
+  else return;
+  refresh();
+});
+
+let lastStats = null;
+function renderStats(st) {
+  lastStats = st;
+  const days = Math.max(1, st.daily.length);
+  const topNature = st.by_nature[0];
+  const hourTotals = Array(24).fill(0); st.by_hour_dow.forEach(c => hourTotals[c.hour] += c.n);
+  const pk = hourTotals.indexOf(Math.max(...hourTotals));
+  const hl = h => new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: "numeric" });
+  document.getElementById("tiles").innerHTML = `
+    <div class="tile hero"><div class="label">Incidents</div><div class="value">${fmtN(st.total)}</div>
+      <div class="note">${st.first_date ? `${st.first_date} to ${st.last_date}` : "No data yet"}</div></div>
+    <div class="tile"><div class="label">Per day</div><div class="value">${(st.total / days).toFixed(1)}</div><div class="note">average over ${days} day${days > 1 ? "s" : ""} with data</div></div>
+    <div class="tile"><div class="label">Most common</div><div class="value" style="font-size:20px">${esc(topNature ? topNature.key : "—")}</div>
+      <div class="note">${topNature ? `${Math.round(topNature.n / st.total * 100)}% of incidents` : ""}</div></div>
+    <div class="tile"><div class="label">Busiest hour</div><div class="value">${st.total ? hl(pk) : "—"}</div><div class="note">${st.total ? `${hourTotals[pk]} incidents` : ""}</div></div>
+    <div class="tile"><div class="label">Mapped</div><div class="value">${st.total ? Math.round(st.mapped / st.total * 100) : 0}%</div><div class="note">${fmtN(st.mapped)} with a location</div></div>`;
+
+  // daily (fill missing dates with 0)
+  const dmap = Object.fromEntries(st.daily.map(d => [d.date, d.n]));
+  const dates = [];
+  if (st.first_date) {
+    for (let d = new Date(st.first_date + "T12:00"); d <= new Date(st.last_date + "T12:00"); d.setDate(d.getDate() + 1))
+      dates.push(d.toISOString().slice(0, 10));
+  }
+  columns(document.getElementById("daily"), dates.map(d => ({
+    label: new Date(d + "T12:00").toLocaleDateString([], { month: "short", day: "numeric" }),
+    total: dmap[d] || 0, segs: [{ n: dmap[d] || 0, color: css("--accent") }],
+    tip: `<b>${new Date(d + "T12:00").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}</b><div class='m'>${dmap[d] || 0} incidents</div>`,
+  })), { aria: "Incidents per day" });
+
+  hBars(document.getElementById("byCat"), [...st.by_category].sort((a, b) => CATS.indexOf(a.key) - CATS.indexOf(b.key)),
+    { color: r => catColor(r.key), swatch: true, selected: r => F.cats.has(r.key) });
+  hBars(document.getElementById("byNature"), st.by_nature,
+    { color: r => catColor(r.category), swatch: true, selected: r => F.natures.has(r.key) });
+  hBars(document.getElementById("byZip"), st.by_zip, {});
+  hBars(document.getElementById("byAgency"), st.by_agency, { selected: r => F.agency === r.key });
+  renderHourDow(document.getElementById("hourDow"), st.by_hour_dow);
+
+  // hour x category stacked
+  const present = CATS.filter(c => st.by_hour_category.some(r => r.category === c));
+  document.getElementById("hourCatLegend").innerHTML = present.map(c => `<span><i style="background:${catColor(c)}"></i>${c}</span>`).join("");
+  const hc = Array.from({ length: 24 }, () => ({}));
+  st.by_hour_category.forEach(r => hc[r.hour][r.category] = r.n);
+  columns(document.getElementById("hourCat"), hc.map((row, h) => {
+    const segs = present.map(c => ({ key: c, n: row[c] || 0, color: catColor(c) }));
+    const total = segs.reduce((a, s) => a + s.n, 0);
+    return { label: hl(h), total, segs,
+      tip: `<b>${hl(h)}</b> · ${total} incidents` + segs.filter(s => s.n).sort((a, b) => b.n - a.n).map(s => `<div class='m'>${s.key}: ${s.n}</div>`).join("") };
+  }), { height: 200, aria: "Incidents by hour of day and category", onClick: h => { toggleSet(F.hours, h); refresh(); } });
+
+  document.getElementById("topLoc").innerHTML = st.top_locations.length ? `<table>
+    <thead><tr><th>Location</th><th>Types</th><th style="text-align:right">Incidents</th></tr></thead><tbody>
+    ${st.top_locations.map(l => `<tr class="click" data-lat="${l.lat}" data-lon="${l.lon}">
+      <td>${esc(l.key)}${l.place ? `<div style="color:var(--muted);font-size:12px">${esc(l.place)}</div>` : ""}</td>
+      <td><span class="dots">${(l.categories || "").split(",").map(c => `<span title="${esc(c)}" style="background:${catColor(c)}"></span>`).join("")}</span></td>
+      <td class="n">${l.n}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">No repeat addresses in this range yet</div>`;
+}
+document.getElementById("byCat").addEventListener("click", e => { const b = e.target.closest("[data-key]"); if (b) { toggleSet(F.cats, b.dataset.key); buildCatChips(); refresh(); } });
+document.getElementById("byNature").addEventListener("click", e => { const b = e.target.closest("[data-key]"); if (b) { toggleSet(F.natures, b.dataset.key); refresh(); } });
+document.getElementById("byAgency").addEventListener("click", e => {
+  const b = e.target.closest("[data-key]"); if (!b) return;
+  F.agency = F.agency === b.dataset.key ? "" : b.dataset.key; document.getElementById("agencySel").value = F.agency; refresh();
+});
+document.getElementById("topLoc").addEventListener("click", e => {
+  const r = e.target.closest("[data-lat]"); if (!r) return;
+  document.querySelector('[data-view="mapView"]').click();
+  setTimeout(() => map.flyTo([+r.dataset.lat, +r.dataset.lon], 17), 50);
+});
+addEventListener("resize", () => { if (lastStats && view === "statsView") renderStats(lastStats); });
+
+// ─────────────────────────────────────────────
+// Status + refresh loop
+// ─────────────────────────────────────────────
+async function loadStatus() {
+  try {
+    const s = await fetch("api/status").then(r => r.json());
+    const fresh = s.last_poll && s.now - s.last_poll < 120 && !s.last_poll_error;
+    document.getElementById("statusPill").className = "pill " + (fresh ? "live" : "stale");
+    document.getElementById("statusText").textContent = fresh ? "Live" : (s.last_poll_error ? "Feed error" : "Waiting for feed");
+    document.getElementById("statusPill").title = s.last_poll_error || "";
+    const llm = !s.llm.enabled ? "rules only"
+      : (s.llm.error || "").startsWith("Downloading") ? `${s.llm.error}…`
+      : s.llm.ok === false ? `AI model offline (keyword rules)` : s.llm.model;
+    document.getElementById("pipelineText").textContent =
+      `${s.queue ? `${fmtN(s.queue)} clips queued · ` : ""}${fmtN(s.incidents)} incidents · ${llm}`;
+    document.getElementById("pipelineText").title = s.llm.error || "";
+    const bf = s.backfill || {}, btn = document.getElementById("bfBtn");
+    btn.disabled = !!bf.running;
+    btn.textContent = bf.running ? "Fetching past calls…" : "Load past calls";
+    btn.title = bf.error ? `Last backfill failed: ${bf.error}` : "Fetch and transcribe past calls. Live calls are always handled first.";
+  } catch { document.getElementById("statusPill").className = "pill stale"; document.getElementById("statusText").textContent = "Server unreachable"; }
+}
+
+async function refresh() {
+  renderActiveFilters();
+  document.getElementById("csvBtn").href = `api/export.csv?${qs()}`;
+  try {
+    if (view === "mapView") {
+      incidents = await api("incidents", { limit: 20000 });
+      renderAll();
+    } else {
+      renderStats(await api("stats"));
+    }
+  } catch (e) { console.warn(e); }
+}
+function renderAll() { if (view === "mapView") { renderFeed(); renderMap(); } else if (lastStats) renderStats(lastStats); }
+
+document.getElementById("bfBtn").addEventListener("click", async () => {
+  const h = document.getElementById("bfHours").value;
+  document.getElementById("bfBtn").disabled = true;
+  try { await fetch(`api/backfill?hours=${h}`, { method: "POST" }); } catch {}
+  loadStatus();
+});
+
+(async function init() {
+  try {
+    const m = await fetch("api/meta").then(r => r.json());
+    cartoKey = m.carto_key;
+    document.getElementById("agencySel").innerHTML = `<option value="">All agencies</option>` + m.agencies.map(a => `<option>${esc(a)}</option>`).join("");
+  } catch {}
+  setBasemap();
+  buildCatChips();
+  if (location.hash === "#stats") { document.querySelector('[data-view="statsView"]').click(); }
+  await Promise.all([loadStatus(), refresh()]);
+  setInterval(loadStatus, 15000);
+  setInterval(() => { if (!document.hidden && !document.getElementById("modal").classList.contains("open")) refresh(); }, 30000);
+})();
+</script>
+</body>
+</html>

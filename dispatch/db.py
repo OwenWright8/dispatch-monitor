@@ -1,0 +1,91 @@
+"""SQLite storage. One connection per thread; WAL lets the API read while the
+worker writes."""
+
+import sqlite3
+import threading
+
+from . import config
+
+_local = threading.local()
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS transmissions (
+    id           TEXT PRIMARY KEY,          -- OpenMHz call _id
+    talkgroup    INTEGER NOT NULL,
+    agency       TEXT,
+    time_ms      INTEGER NOT NULL,          -- UTC epoch ms
+    len_s        INTEGER,
+    url          TEXT,
+    status       TEXT NOT NULL DEFAULT 'pending',  -- pending|done|short|error
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    transcript   TEXT,
+    method       TEXT,                      -- llm|rules|skipped
+    extracted    TEXT,                      -- JSON
+    is_dispatch  INTEGER,
+    incident_id  INTEGER,
+    audio_path   TEXT,
+    error        TEXT,
+    created_at   TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS tx_status ON transmissions(status, time_ms);
+CREATE INDEX IF NOT EXISTS tx_time ON transmissions(time_ms);
+CREATE INDEX IF NOT EXISTS tx_incident ON transmissions(incident_id);
+
+CREATE TABLE IF NOT EXISTS incidents (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    first_ms     INTEGER NOT NULL,
+    last_ms      INTEGER NOT NULL,
+    local_date   TEXT NOT NULL,             -- YYYY-MM-DD in county local time
+    local_hour   INTEGER NOT NULL,          -- 0-23
+    local_dow    INTEGER NOT NULL,          -- 0=Mon .. 6=Sun
+    address      TEXT,                      -- as heard (cleaned)
+    place        TEXT,
+    matched      TEXT,                      -- geocoder's canonical address
+    lat          REAL,
+    lon          REAL,
+    precision    TEXT,                      -- address|intersection|street|place
+    geo_source   TEXT,
+    zip          TEXT,
+    category     TEXT NOT NULL,
+    nature       TEXT NOT NULL,
+    agencies     TEXT NOT NULL DEFAULT '[]',
+    units        TEXT NOT NULL DEFAULT '[]',
+    patient_age  INTEGER,
+    patient_sex  TEXT,
+    summary      TEXT,
+    n_tx         INTEGER NOT NULL DEFAULT 1,
+    method       TEXT
+);
+CREATE INDEX IF NOT EXISTS inc_time ON incidents(first_ms);
+CREATE INDEX IF NOT EXISTS inc_cat ON incidents(category, first_ms);
+CREATE INDEX IF NOT EXISTS inc_addr ON incidents(matched);
+
+CREATE TABLE IF NOT EXISTS geocache (key TEXT PRIMARY KEY, result TEXT);
+CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);
+"""
+
+
+def conn() -> sqlite3.Connection:
+    c = getattr(_local, "conn", None)
+    if c is None:
+        config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        c = sqlite3.connect(config.DB_PATH, timeout=30, isolation_level=None)  # autocommit
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA synchronous=NORMAL")
+        c.execute("PRAGMA busy_timeout=30000")
+        _local.conn = c
+    return c
+
+
+def init():
+    conn().executescript(SCHEMA)
+
+
+def get_state(key: str, default=None):
+    row = conn().execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def set_state(key: str, value):
+    conn().execute("INSERT OR REPLACE INTO state(key, value) VALUES (?, ?)", (key, str(value)))
