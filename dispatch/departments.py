@@ -89,6 +89,8 @@ def _keep_lead(spoken: str):
     """Replacement that keeps any leading punctuation/space a regex consumed."""
     def rep(m: re.Match) -> str:
         lead = re.match(r"^\W*(?:attention,?\s+)?", m.group(0), re.I).group(0)
+        if m.group(0)[len(lead):].lower() == spoken.lower():
+            return m.group(0)               # already right; don't rewrite (keeps fixes idempotent)
         return lead + spoken
     return rep
 
