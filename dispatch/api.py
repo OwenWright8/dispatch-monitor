@@ -14,16 +14,19 @@ feed, and every chart always describe the same set of incidents:
 from __future__ import annotations
 
 import csv
+import hmac
 import io
 import json
 import time
 from pathlib import Path
 
+import requests
+
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, db, openmhz, pipeline
+from . import config, db, openmhz, pipeline, settings
 from .taxonomy import CATEGORIES, TAXONOMY
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -107,7 +110,7 @@ def meta():
             "departments": depts,
             "agencies": [d["name"] for d in depts],
             "channels": [{"talkgroup": ch.talkgroup, "agency": ch.agency} for ch in config.CHANNELS.values()],
-            "carto_key": config.CARTO_API_KEY or None}
+            "carto_key": settings.get("CARTO_API_KEY") or None}
 
 
 @app.get("/api/status")
@@ -125,11 +128,46 @@ def status():
         "newest_ms": q("SELECT MAX(first_ms) FROM incidents"),
         "last_poll": s["last_poll"], "last_poll_error": s["last_poll_error"],
         "last_processed": s["last_processed"],
-        "llm": {"enabled": config.LLM_ENABLED, "model": config.OLLAMA_MODEL, "ok": s["llm_ok"], "error": s["llm_error"]},
-        "whisper_model": config.WHISPER_MODEL,
+        "llm": {"enabled": settings.get("LLM_ENABLED"), "model": settings.get("OLLAMA_MODEL"), "ok": s["llm_ok"], "error": s["llm_error"]},
+        "whisper_model": settings.get("WHISPER_MODEL"),
         "backfill": s["backfill"],
         "now": time.time(),
     }
+
+
+@app.get("/api/settings")
+def get_settings():
+    return {"settings": settings.describe(), "locked": bool(settings.ADMIN_PASSWORD), "version": config.VERSION}
+
+
+@app.put("/api/settings")
+async def put_settings(req: Request):
+    """Body: {"KEY": value, ...}; null resets a setting to its default.
+    With ADMIN_PASSWORD set, send it in the X-Admin-Password header."""
+    if settings.ADMIN_PASSWORD and not hmac.compare_digest(
+            req.headers.get("x-admin-password", ""), settings.ADMIN_PASSWORD):
+        raise HTTPException(401, "Wrong or missing admin password")
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Expected a JSON object")
+    try:
+        changed = settings.update(body)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+    if {"OLLAMA_URL", "OLLAMA_MODEL", "LLM_ENABLED"} & set(changed):
+        pipeline.llm_settings_changed()
+    return {"changed": changed, "settings": settings.describe()}
+
+
+@app.get("/api/ollama/models")
+def ollama_models():
+    """Models the configured Ollama already has, for the settings picker."""
+    try:
+        r = requests.get(f"{settings.get('OLLAMA_URL')}/api/tags", timeout=5)
+        r.raise_for_status()
+        return {"ok": True, "models": sorted(m["name"] for m in r.json().get("models", []))}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200], "models": []}
 
 
 @app.post("/api/backfill")

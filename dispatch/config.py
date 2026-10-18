@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# Release version, set by the image build from the git tag (VERSION build arg).
+VERSION = os.environ.get("APP_VERSION", "dev")
+
+
 def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 

@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from . import config, db, departments, extract, openmhz, transcribe
+from . import config, db, departments, extract, openmhz, settings, transcribe
 from .geo import Geocoder, GeoResult
 from .taxonomy import category_for
 
@@ -52,7 +52,7 @@ def _insert(calls: list[dict], min_ms: int = 0) -> int:
     n = 0
     for call in calls:
         tg = call.get("talkgroupNum")
-        ch = config.CHANNELS.get(tg)
+        ch = settings.enabled_channels().get(tg)
         t_ms = openmhz.to_ms(call["time"])
         if ch is None or t_ms < min_ms:
             continue
@@ -60,7 +60,7 @@ def _insert(calls: list[dict], min_ms: int = 0) -> int:
             "INSERT OR IGNORE INTO transmissions(id, talkgroup, agency, time_ms, len_s, url, status) "
             "VALUES (?,?,?,?,?,?,?)",
             (call["_id"], tg, ch.agency, t_ms, call.get("len"), call.get("url"),
-             "pending" if (call.get("len") or 0) >= config.MIN_CALL_SECONDS else "short"))
+             "pending" if (call.get("len") or 0) >= settings.get("MIN_CALL_SECONDS") else "short"))
         n += cur.rowcount
     return n
 
@@ -145,7 +145,7 @@ def poller_loop(stop: threading.Event):
         status["last_poll_error"] = str(e)
     if config.BACKFILL_HOURS > 0:
         start_backfill(config.BACKFILL_HOURS)     # in its own thread; polling continues
-    while not stop.wait(config.POLL_INTERVAL_S):
+    while not stop.wait(settings.get("POLL_INTERVAL_S")):
         try:
             poll_once()
         except Exception as e:
@@ -203,7 +203,7 @@ def attach(time_ms: int, depts: list[str], fields: dict, geo: GeoResult | None, 
     if not fields.get("is_dispatch") or not (fields.get("address") or fields.get("place")):
         return None
     c = db.conn()
-    window = config.INCIDENT_WINDOW_MIN * 60_000
+    window = settings.get("INCIDENT_WINDOW_MIN") * 60_000
     nature = fields.get("nature") or "Other"
     rows = c.execute("SELECT * FROM incidents WHERE first_ms BETWEEN ? AND ? ORDER BY ABS(first_ms - ?)",
                      (time_ms - window, time_ms + window, time_ms)).fetchall()
@@ -263,10 +263,17 @@ def _prepare_llm(wait_s: int = 0):
         status["llm_ok"], status["llm_error"] = None, None   # becomes True on the first successful call
 
 
+def llm_settings_changed():
+    """Ollama address/model changed in the dashboard: re-check it on the next call."""
+    global _llm_last_prepare
+    status["llm_ok"], status["llm_error"] = False, "Settings changed; connecting…"
+    _llm_last_prepare = 0.0
+
+
 def _extract(transcript: str) -> tuple[dict, str]:
     global _llm_warned
     # Ollama was down or the model missing: try again every 10 minutes.
-    if status["llm_ok"] is False and time.time() - _llm_last_prepare > 600:
+    if status["llm_ok"] is False and settings.get("LLM_ENABLED") and time.time() - _llm_last_prepare > 600:
         _prepare_llm()
     try:
         fields, method = extract.extract(transcript, use_llm=True)
@@ -311,7 +318,7 @@ def process(tx):
         transcript = departments.normalize(raw)
         fields, method, inc = handle_transcript(tx, transcript)
         audio_path = None
-        if inc and config.KEEP_AUDIO:
+        if inc and settings.get("KEEP_AUDIO"):
             audio_path = _archive_path(tx)
             shutil.move(tmp, audio_path)
         c.execute("UPDATE transmissions SET status='done', transcript=?, transcript_raw=?, method=?, extracted=?, "
@@ -332,7 +339,7 @@ def process(tx):
 def worker_loop(stop: threading.Event):
     c = db.conn()
     geocoder()    # build/load street index up front
-    if config.LLM_ENABLED:
+    if settings.get("LLM_ENABLED"):
         _prepare_llm(wait_s=300)
     while not stop.is_set():
         tx = c.execute("SELECT * FROM transmissions WHERE status='pending' AND attempts < 4 "
