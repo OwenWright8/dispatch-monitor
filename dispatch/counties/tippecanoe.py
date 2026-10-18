@@ -26,62 +26,62 @@ DEPARTMENTS = (
         detect=(r"\b(?:west|east|north|south)side medic\b", r"\b(?:south|north|central|zone \d) medic\b",
                 r"\bmedic from central\b"),
     ),
-    Department("Lafayette Fire", area="City of Lafayette",
+    Department("Lafayette Fire", area="City of Lafayette", towns=("lafayette",),
                detect=(r"(?<!west )\blafayette fire\b", r"\blfd\b")),
-    Department("West Lafayette Fire", area="City of West Lafayette", detect=(r"\bwest lafayette fire\b", r"\bwlfd\b")),
-    Department("Purdue Fire", area="Purdue University", detect=(r"\bpurdue fire\b",)),
+    Department("West Lafayette Fire", area="City of West Lafayette", towns=("west lafayette",), detect=(r"\bwest lafayette fire\b", r"\bwlfd\b")),
+    Department("Purdue Fire", area="Purdue University", towns=("purdue",), reach_km=3, detect=(r"\bpurdue fire\b",)),
     Department(
-        "Wea Township Fire", spoken="Wea Fire", unit_prefixes=("4xx",), area="Wea Township",
+        "Wea Township Fire", spoken="Wea Fire", towns=("wea",), unit_prefixes=("4xx",), area="Wea Township",
         aliases=(r"\b(?:wea|we all|we|wee|way|whey|weigh|we a|weah|wia|why a)" + FIRE,),
     ),
     Department(
-        "Wabash Township Fire", spoken="Wabash Fire", unit_prefixes=("6xx",), area="Wabash & Shelby Townships",
+        "Wabash Township Fire", spoken="Wabash Fire", towns=("west lafayette", "montmorenci"), unit_prefixes=("6xx",), area="Wabash & Shelby Townships",
         aliases=(r"\b(?:wabash|wobash|wall bash|wa bash|wabish)" + FIRE,),
         detect=(r"\bwabash,?\s+(?:medic\s+|rescue\s+|engine\s+)?6\d\d\b",),
     ),
     Department(
-        "Shadeland Fire", spoken="Shadeland Fire", unit_prefixes=("3xx",), area="Union Township / Shadeland",
+        "Shadeland Fire", spoken="Shadeland Fire", towns=("shadeland",), unit_prefixes=("3xx",), area="Union Township / Shadeland",
         aliases=(r"\b(?:shade ?land|shady ?land|shailin|shailand|shayland|shaylin|chadland|shadlin|shadelin|"
                  r"shellan|sheltland)" + FIRE,),
     ),
     Department(
-        "Sheffield Fire", spoken="Sheffield Fire", unit_prefixes=("2xx",), area="Dayton / Sheffield & Perry Townships",
+        "Sheffield Fire", spoken="Sheffield Fire", towns=("dayton",), unit_prefixes=("2xx",), area="Dayton / Sheffield & Perry Townships",
         aliases=(r"\b(?:sheffield|shefield|sheffeld|shuffield|chefield|sheffel)" + FIRE,
                  r"\bdayton" + FIRE),
     ),
     Department(
-        "West Point Fire", spoken="West Point Fire", unit_prefixes=("5xx",), area="Wayne & Jackson Townships",
+        "West Point Fire", spoken="West Point Fire", towns=("west point",), unit_prefixes=("5xx",), area="Wayne & Jackson Townships",
         aliases=(r"\bwest ?point" + FIRE,),
     ),
     Department(
-        "Battle Ground Fire", spoken="Battle Ground Fire", unit_prefixes=("7xx",), area="Tippecanoe Township",
+        "Battle Ground Fire", spoken="Battle Ground Fire", towns=("battle ground",), unit_prefixes=("7xx",), area="Tippecanoe Township",
         aliases=(r"\b(?:battle ?ground|battlegrounds?|a?bout to go(?:\s+on)?|battle grand|powder ground|"
                  r"batter ground|bottle ground)" + FIRE,
                  r"\btippecanoe township fire\b"),
     ),
     Department(
-        "Buck Creek Fire", spoken="Buck Creek Fire", unit_prefixes=("9xx",), area="Washington Township",
+        "Buck Creek Fire", spoken="Buck Creek Fire", towns=("buck creek",), unit_prefixes=("9xx",), area="Washington Township",
         aliases=(r"\b(?:buck ?creek|bug creek|buck crick|book creek|buck greek)" + FIRE,),
     ),
     Department(
-        "Randolph Township Fire", spoken="Randolph Fire", unit_prefixes=("11xx",), area="Randolph & Jackson / Romney",
+        "Randolph Township Fire", spoken="Randolph Fire", towns=("romney",), unit_prefixes=("11xx",), area="Randolph & Jackson / Romney",
         aliases=(r"\b(?:randolph|randall|randle|randolf|rudolph|random|romney)" + FIRE,),
     ),
     Department(
-        "Clarks Hill Fire", spoken="Clarks Hill Fire", unit_prefixes=("12xx", "8xx"), area="Lauramie Township",
+        "Clarks Hill Fire", spoken="Clarks Hill Fire", towns=("clarks hill", "stockwell"), unit_prefixes=("12xx", "8xx"), area="Lauramie Township",
         aliases=(r"\b(?:clarks?'?\s?hill|clark'?s hill|clarkshill|clark hill)" + FIRE,),
     ),
     Department(
-        "Otterbein Fire", spoken="Otterbein Fire", unit_prefixes=("13xx",), area="Shelby Township / Otterbein",
+        "Otterbein Fire", spoken="Otterbein Fire", towns=("otterbein",), unit_prefixes=("13xx",), area="Shelby Township / Otterbein",
         aliases=(r"\b(?:otter ?bein|otter ?bun|otter ?man|otter ?bean|otter ?bine|otter ?bind|otter ?bay|otterbin)"
                  + FIRE,),
     ),
     Department(
-        "Stockwell Fire", spoken="Stockwell Fire", area="Lauramie Township / Stockwell",
+        "Stockwell Fire", spoken="Stockwell Fire", towns=("stockwell",), area="Lauramie Township / Stockwell",
         aliases=(r"\b(?:stockwell|stock well|stockwill)" + FIRE,),
     ),
     Department(
-        "Evonik Fire", spoken="Evonik Fire", unit_prefixes=("16xx",), area="Evonik Tippecanoe Labs plant",
+        "Evonik Fire", spoken="Evonik Fire", towns=("lafayette",), unit_prefixes=("16xx",), area="Evonik Tippecanoe Labs plant",
         aliases=(r"\b(?:evonik|evonic|a vonic|avonic|eve onyx)" + FIRE,),
     ),
 )
@@ -120,6 +120,7 @@ PROFILE = Profile(
         "buck creek": (40.4875, -86.7631),
         "stockwell": (40.2853, -86.7703),
         "montmorenci": (40.4728, -87.0300),
+        "wea": (40.3650, -86.8800),
     },
     whisper_prompt=(
         "Tippecanoe County fire and EMS dispatch, Lafayette and West Lafayette, Indiana. "
@@ -129,13 +130,31 @@ PROFILE = Profile(
         "Medical run, lift assist, stand by for dispatch, go channel 2, tone time 1417. "
         "North Salisbury Street, Sagamore Parkway, Teal Road, Creasy Lane, Greenbush Street, Kossuth Street, "
         "Concord Road, McCarty Lane, Yeager Road, Klondike Road, Northwestern Avenue, County Road 500 East. "
-        "Westminster Village, LTHC, IU Health Arnett, Franciscan, Purdue."
+        "Westminster Village, LTHC, Sycamore Springs, IU Health Arnett, Franciscan, Purdue."
     ),
     street_hints=("Sagamore Parkway, Salisbury, Teal Road, Creasy Lane, Greenbush, Union, Kossuth, Concord Road, "
                   "McCarty Lane, Yeager Road, Klondike Road, Cumberland Avenue, Northwestern Avenue, Stadium Avenue, "
                   "State Street, River Road, Shadeland Road, Wea School Road"),
     place_examples='"Westminster Village", "Central Presbyterian Church", "Purdue Police Department", "LTHC", "IVH"',
     unit_examples='"Station 3", "Engine 1502", "Medic 5", "Westside Medic", "Engine 924", "Rescue 607"',
+    # Whisper's local-vocabulary hints pull these toward the wrong word.
+    transcript_fixes=(
+        (r"\bsagamore springs\b", "Sycamore Springs"),                 # the hospital; Sagamore is the parkway
+        (r"\bpark ?view (?=boulevard|blvd)", "Park East "),             # 833 Park East Blvd (Sycamore Springs)
+        (r"\bwalgreens? (?=street|st\b)", "Waldron "),                 # Waldron St, Purdue fraternities
+    ),
+    hospitals=("IU Health Arnett", "Arnett", "Franciscan", "Franciscan East", "St. Elizabeth", "Unity",
+               "Sycamore Springs"),
+    examples=(
+        ("TEAS, Buck Creek Fire, TEAS, Buck Creek Fire, be en route 5585 North 900 East, 5585 North 900 East, "
+         "smoke detector going off in the barn, no smoke or fire seen, tone time 0705.",
+         {"is_dispatch": True, "address": "5585 North 900 East", "place": None, "nature": "Fire Alarm",
+          "units": [], "patient_age": None, "patient_sex": None,
+          "summary": "Smoke detector sounding in barn, no fire seen."}),
+        ("Medic 605 is en route to IU with one, single patient. Clear.",
+         {"is_dispatch": False, "address": None, "place": None, "nature": "Other", "units": ["Medic 605"],
+          "patient_age": None, "patient_sex": None, "summary": None}),
+    ),
     place_aliases={
         "corec": "France A. Córdova Recreational Sports Center",
         "co rec": "France A. Córdova Recreational Sports Center",
@@ -150,5 +169,7 @@ PROFILE = Profile(
         "mackey": "Mackey Arena",
         "mackey arena": "Mackey Arena",
         "ivh": "Indiana Veterans' Home",
+        "sycamore springs": "Sycamore Springs Hospital",
+        "sycamore": "Sycamore Springs Hospital",
     },
 )

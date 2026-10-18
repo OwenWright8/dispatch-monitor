@@ -56,6 +56,8 @@ h1 { font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
 .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .pill.live .dot { background: var(--live); }
 .pill.stale .dot { background: var(--stale); }
+.pill.healing .dot { background: var(--c-traffic); animation: pulse-dot 1.2s ease-in-out infinite; }
+@keyframes pulse-dot { 50% { opacity: .35; } }
 .spacer { flex: 1; }
 .tabs { display: flex; gap: 2px; background: var(--surface-2); padding: 3px; border-radius: 8px; }
 .tabs button { border: 0; background: transparent; padding: 5px 14px; border-radius: 6px; cursor: pointer; color: var(--ink-2); }
@@ -854,9 +856,15 @@ async function loadStatus() {
   try {
     const s = await fetch("api/status").then(r => r.json());
     const fresh = s.last_poll && s.now - s.last_poll < 120 && !s.last_poll_error;
-    document.getElementById("statusPill").className = "pill " + (fresh ? "live" : "stale");
-    document.getElementById("statusText").textContent = fresh ? "Live" : (s.last_poll_error ? "Feed error" : "Waiting for feed");
-    document.getElementById("statusPill").title = s.last_poll_error || "";
+    // The feed heals itself (new session / browser identity, backoff); say so instead of a dead-end error.
+    const retryIn = s.next_poll ? Math.max(0, Math.round(s.next_poll - s.now)) : null;
+    const healing = !fresh && s.last_poll_error;
+    document.getElementById("statusPill").className = "pill " + (fresh ? "live" : healing && s.poll_failures < 20 ? "healing" : "stale");
+    document.getElementById("statusText").textContent = fresh ? "Live"
+      : healing ? (s.poll_failures < 20 ? "Reconnecting…" : "Feed error, retrying") : "Waiting for feed";
+    document.getElementById("statusPill").title = healing
+      ? `${s.last_poll_error}\n${s.poll_failures} failed attempt(s); trying again${retryIn != null ? ` in ${retryIn}s` : ""} with a fresh connection.`
+      : "";
     const llm = !s.llm.enabled ? "rules only"
       : (s.llm.error || "").startsWith("Downloading") ? `${s.llm.error}…`
       : s.llm.ok === false ? `AI model offline (keyword rules)` : s.llm.model;
