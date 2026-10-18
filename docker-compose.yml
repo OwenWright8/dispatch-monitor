@@ -1,50 +1,38 @@
+# Mac mini:  run Ollama natively (it uses the GPU), then `docker compose up -d`
+# NAS:       set COMPOSE_PROFILES=ollama and OLLAMA_URL=http://ollama:11434 in .env
+#            (runs Ollama in a container on the CPU), then `docker compose up -d`
 services:
 
-  poller:
-    # Pre-built image from GitHub Container Registry (recommended for Dockge)
-    # Replace GHCR_OWNER with your GitHub username, or set it in .env
-    image: ghcr.io/${GHCR_OWNER:-your-github-username}/dispatch-monitor:latest
-    # To build locally instead: comment out 'image:' above and uncomment 'build:' below
+  app:
+    image: ghcr.io/${GHCR_OWNER:-owenwright8}/dispatch-monitor:latest
+    # To build from source instead, uncomment:
     # build: .
     restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8086}:8080"
     env_file:
       - path: .env
-        required: false        # .env is optional; defaults are baked into the image
+        required: false
     environment:
-      - DB_PATH=/app/data/dispatch.db
-      - CALLS_JSON=/app/data/calls.json
-      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434/api/generate}
-      - WHISPER_MODEL=${WHISPER_MODEL:-base.en}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b}
+      - WHISPER_MODEL=${WHISPER_MODEL:-small.en}
+      - BACKFILL_HOURS=${BACKFILL_HOURS:-24}
     volumes:
-      - dispatch-data:/app/data
-      - whisper-cache:/root/.cache/whisper
+      - dispatch-data:/data          # database, archived audio, street index, Whisper model
     extra_hosts:
-      - "host.docker.internal:host-gateway"  # reach Ollama on the Docker host
-    healthcheck:
-      test: ["CMD", "python", "-c",
-             "import sqlite3,os; con=sqlite3.connect(os.environ['DB_PATH']); con.execute('SELECT 1'); con.close()"]
-      interval: 60s
-      timeout: 10s
-      start_period: 90s
-      retries: 3
+      - "host.docker.internal:host-gateway"
 
-  web:
-    # dashboard.html and nginx.conf are baked into this image — no bind mounts needed
-    image: ghcr.io/${GHCR_OWNER:-your-github-username}/dispatch-monitor-web:latest
-    # To build locally instead: comment out 'image:' above and uncomment 'build:' below
-    # build:
-    #   context: .
-    #   dockerfile: Dockerfile.web
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
     restart: unless-stopped
-    ports:
-      - "${WEB_PORT:-8086}:80"
     volumes:
-      - dispatch-data:/usr/share/nginx/html/data:ro  # live calls.json from poller
-    depends_on:
-      poller:
-        condition: service_healthy
+      - ollama-models:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=30m
+      - OLLAMA_NUM_PARALLEL=1
 
 volumes:
   dispatch-data:
-  whisper-cache:
+  ollama-models:

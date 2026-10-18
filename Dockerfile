@@ -1,31 +1,23 @@
 FROM python:3.12-slim
 
-# ffmpeg is required by Whisper for audio decoding
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg curl \
- && rm -rf /var/lib/apt/lists/*
-
+# PyAV wheels bundle ffmpeg, so no system ffmpeg is needed.
 WORKDIR /app
-
-# Install Python deps first (layer-cached unless requirements change)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app
-COPY poller.py .
+COPY dispatch/ dispatch/
+COPY web/ web/
 
-# Data dir (mounted as named volume in production)
-RUN mkdir -p /app/data
+ENV DATA_DIR=/data \
+    WHISPER_MODEL=small.en \
+    OLLAMA_URL=http://host.docker.internal:11434 \
+    OLLAMA_MODEL=qwen2.5:7b \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    PYTHONUNBUFFERED=1
+VOLUME /data
+EXPOSE 8080
 
-# Whisper model: tiny.en / base.en / small.en / medium.en
-ENV WHISPER_MODEL=base.en
-ENV OLLAMA_MODEL=llama3.2
-ENV OLLAMA_URL=http://host.docker.internal:11434/api/generate
-ENV DB_PATH=/app/data/dispatch.db
-ENV CALLS_JSON=/app/data/calls.json
+HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/status', timeout=5)" || exit 1
 
-HEALTHCHECK --interval=60s --timeout=10s --start-period=60s --retries=3 \
-  CMD python -c "import sqlite3,os; con=sqlite3.connect(os.environ['DB_PATH']); con.execute('SELECT 1'); con.close()" \
-      || exit 1
-
-CMD ["python", "-u", "poller.py"]
+CMD ["python", "-m", "dispatch"]
