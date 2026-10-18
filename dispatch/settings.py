@@ -37,6 +37,10 @@ SPECS: tuple[Spec, ...] = (
     Spec("OLLAMA_MODEL", "Model", "AI model", "str", config.OLLAMA_MODEL,
          "Downloaded automatically if Ollama doesn't have it yet."),
     Spec("OLLAMA_TIMEOUT_S", "Timeout per call (s)", "AI model", "int", config.OLLAMA_TIMEOUT_S, min=10, max=900),
+    Spec("WHISPER_URL", "Speech-to-text server", "Speech to text", "str", config.WHISPER_URL,
+         "Optional whisper-asr-webservice on a GPU (e.g. http://whisper-asr:9000 running large-v3): much "
+         "better at street and department names. Empty = the built-in model below. If the server is "
+         "unreachable the built-in model takes over until it's back."),
     Spec("WHISPER_MODEL", "Speech-to-text model", "Speech to text", "choice", config.WHISPER_MODEL,
          "Bigger hears names better but is slower. Models other than the built-in one download on first use.",
          choices=("base.en", "small.en", "medium.en", "large-v3")),

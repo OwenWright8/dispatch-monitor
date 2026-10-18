@@ -137,6 +137,7 @@ class GeoResult:
     matched: str        # canonical name that was matched
     zip: str | None
     source: str         # tiger | census | nominatim
+    confidence: str = ""   # confirmed | high | approximate | doubtful (see Geocoder._confidence)
 
     def to_dict(self):
         return asdict(self)
@@ -159,6 +160,10 @@ class Hints:
     def within_reach(self, p, default_m: float) -> bool:
         return not self.anchors or any(_dist_m(p, a[:2]) <= (a[2] if len(a) > 2 and a[2] else default_m)
                                        for a in self.anchors)
+
+    def cross_min(self, p) -> float:
+        """Distance to the nearest of the cross streets (one garbled name shouldn't count against a pin)."""
+        return min(min(_dist_m(p, q) for q in pts) for pts in self.cross) if self.cross else 0.0
 
     def cross_dist(self, p) -> float:
         return sum(min(min(_dist_m(p, q) for q in pts), 5_000) for pts in self.cross) if self.cross else 0.0
@@ -190,7 +195,9 @@ def parse_cross_streets(text: str) -> list[str]:
     out = []
     for p in parts:
         p = p.strip(" .")
-        if p and _STREETISH.search(p) and len(p) <= 40 and p.lower() not in (x.lower() for x in out):
+        # a bare "Boulevard" / "Lane" left over from a garbled name isn't a street
+        if (p and _STREETISH.search(p) and len(p) <= 40 and len(p.split()) >= 2
+                and p.lower() not in (x.lower() for x in out)):
             out.append(p)
     return out[:4]
 
@@ -313,7 +320,12 @@ class TigerIndex:
         return edges, dict(names), display
 
     # ── street matching ─────────────────────────────────────────────────
-    def match(self, spoken: str) -> list[tuple[float, str, list[int]]]:
+    # Second, looser pass for names Whisper mangles ("Haroldry" for Heraldry): only
+    # same-type streets inside the dispatched departments' area qualify.
+    LOOSE_CUTOFF = 0.68
+    LOOSE_AREA_M = 8_000
+
+    def match(self, spoken: str, hints: "Hints | None" = None) -> list[tuple[float, str, list[int]]]:
         """Return [(score, display_name, [tlid,...])] best first."""
         q = parse_street(spoken)
         if not q.name:
@@ -334,6 +346,14 @@ class TigerIndex:
             for n in self.name_list:
                 if n.replace(" ", "") == squashed:
                     candidates[n] = 0.95
+        if not candidates and hints is not None and hints.anchors and q.suftype:
+            for m in difflib.get_close_matches(q.name, self.name_list, n=10, cutoff=self.LOOSE_CUTOFF):
+                segs = [(tlid, st) for tlid, pd, st, sd in self.names[m]]
+                if not any(st == q.suftype for _, st in segs):
+                    continue
+                if any(hints.anchor_dist(p) <= self.LOOSE_AREA_M
+                       for tlid, st in segs if st == q.suftype for p in self.edges[tlid]["pts"][::4]):
+                    candidates[m] = difflib.SequenceMatcher(None, q.name, m).ratio()
         groups: dict[tuple, dict] = {}
         for base, ratio in candidates.items():
             for tlid, pd, st, sd in self.names[base]:
@@ -397,7 +417,7 @@ class TigerIndex:
 
     def address(self, number: int, spoken_street: str, hints: "Hints | None" = None) -> GeoResult | None:
         hints = hints or Hints()
-        matches = self.match(spoken_street)
+        matches = self.match(spoken_street, hints)
         if not matches:
             return None
         best_score = matches[0][0]
@@ -442,7 +462,7 @@ class TigerIndex:
 
     def street(self, spoken_street: str, hints: "Hints | None" = None) -> GeoResult | None:
         hints = hints or Hints()
-        matches = self.match(spoken_street)
+        matches = self.match(spoken_street, hints)
         if not matches:
             return None
         best = matches[0][0]
@@ -519,6 +539,15 @@ PLACE_ALIASES = config.PROFILE.place_aliases
 _GENERIC = {"the", "of", "at", "and", "residence", "hall", "center", "centre", "building", "bldg", "recreational",
             "recreation", "department", "dept", "apartments", "apartment", "apts", "inc", "store", "facility",
             "complex", "house", "home", "a", "in", "on", "sports"}
+
+
+_LEARN_DROP = {"senior", "living", "assisted", "healthcare", "care", "community", "center", "the"}
+
+
+def learn_key(place: str | None) -> str:
+    """'Independence Village Senior Living' and 'Independence Village' are the same place."""
+    toks = [t for t in _place_tokens(place or "") if t not in _LEARN_DROP]
+    return " ".join(toks)
 
 
 def _place_tokens(name: str) -> list[str]:
@@ -645,19 +674,25 @@ _nominatim_last = 0.0
 
 
 def census_geocode(oneline: str) -> GeoResult | None:
-    try:
-        r = _session.get(
-            "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress",
-            params={"address": oneline, "benchmark": "Public_AR_Current", "format": "json"}, timeout=15)
-        r.raise_for_status()
-        for m in r.json()["result"]["addressMatches"]:
-            lat, lon = m["coordinates"]["y"], m["coordinates"]["x"]
-            if in_county(lat, lon):
-                # "3106 EAGLES WAY DR, LAFAYETTE, IN, 47909" -> "3106 Eagles Way Dr" (same form as TIGER)
-                return GeoResult(lat, lon, "address", m["matchedAddress"].split(",")[0].title(),
-                                 m["addressComponents"].get("zip"), "census")
-    except Exception as e:
-        log.debug(f"Census geocoder error for {oneline!r}: {e}")
+    """oneline: "number street, town, ST". When the town isn't a postal city
+    ("Wea", "Durbin") and nothing matches, retry with just the state; results
+    are limited to the county either way."""
+    parts = [p.strip() for p in oneline.split(",")]
+    tries = [oneline] + ([f"{parts[0]}, {parts[-1]}"] if len(parts) >= 3 else [])
+    for q in tries:
+        try:
+            r = _session.get(
+                "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress",
+                params={"address": q, "benchmark": "Public_AR_Current", "format": "json"}, timeout=15)
+            r.raise_for_status()
+            for m in r.json()["result"]["addressMatches"]:
+                lat, lon = m["coordinates"]["y"], m["coordinates"]["x"]
+                if in_county(lat, lon):
+                    # "3106 EAGLES WAY DR, LAFAYETTE, IN, 47909" -> "3106 Eagles Way Dr" (same form as TIGER)
+                    return GeoResult(lat, lon, "address", m["matchedAddress"].split(",")[0].title(),
+                                     m["addressComponents"].get("zip"), "census")
+        except Exception as e:
+            log.debug(f"Census geocoder error for {q!r}: {e}")
     return None
 
 
@@ -738,20 +773,26 @@ class Geocoder:
                              (key, json.dumps(res.to_dict()) if res else None))
 
     def geocode(self, address: str | None, place: str | None, city_hint: str = "",
-                anchors=(), cross=()) -> GeoResult | None:
+                anchors=(), cross=(), fresh: bool = False, known: "GeoResult | None" = None) -> GeoResult | None:
         """anchors: (lat, lon) of the dispatched departments' towns; cross: cross-street names."""
         anchors = list(anchors) or [c for c in [CITY_CENTERS.get((city_hint or "").lower())] if c]
         cross = [c for c in cross if c]
         key = (f"{(address or '').lower()}|{(place or '').lower()}|{(city_hint or '').lower()}|"
-               + ";".join(f"{a[0]:.3f},{a[1]:.3f}" + (f"/{a[2]:.0f}" if len(a) > 2 and a[2] else "") for a in anchors) + "|" + ";".join(c.lower() for c in cross))
+               + ";".join(f"{a[0]:.3f},{a[1]:.3f}" + (f"/{a[2]:.0f}" if len(a) > 2 and a[2] else "") for a in anchors) + "|" + ";".join(c.lower() for c in cross)
+               + (f"|known:{known.lat:.4f},{known.lon:.4f}" if known else ""))
         hit, cached = self._cached(key)
-        if hit:
+        if hit and not (fresh and (cached is None or cached.confidence in ("approximate", "doubtful", ""))):
             return cached
         hints = Hints(anchors, [p for p in (self.tiger.points(c) if self.tiger else [] for c in cross) if p])
         res = self._geocode(address, place, city_hint or config.PROFILE.name, hints, cross)
         if res and res.precision == "street" and not self._plausible(res, hints):
             res = None      # a fuzzy street match outside the department's area: better unmapped than wrong
-        if res and place and res.precision != "place":
+        if known and (res is None or res.precision == "street"
+                      or self._confidence(res, hints) in ("approximate", "doubtful")):
+            # The address failed or doesn't fit the call, but this place was placed
+            # confidently on an earlier call for the same department.
+            res = GeoResult(known.lat, known.lon, "place", known.matched, known.zip, "learned")
+        elif res and place and res.precision != "place":
             p = self.places.find(place, (res.lat, res.lon))
             if p and _dist_m((p.lat, p.lon), (res.lat, res.lon)) < 400:
                 # "12999 Pennsylvania St at Majestic Care": put the pin on the building
@@ -764,8 +805,25 @@ class Geocoder:
                 p = self.places.find(place, hints.near)
                 if p and self.places.is_unique(place, p.matched) and self._plausible(p, hints):
                     res = p
+        if res:
+            res.confidence = self._confidence(res, hints)
         self._store(key, res)
         return res
+
+    def _confidence(self, r: GeoResult, hints: Hints) -> str:
+        """How sure the pin is. Anything below "high" is retried in the background."""
+        p = (r.lat, r.lon)
+        if r.precision == "street" or r.precision == "intersection" and " near " in r.matched:
+            return "approximate"
+        if hints.cross:
+            nearest = hints.cross_min(p)
+            if nearest < 400:
+                return "confirmed"           # a cross street read out is right there
+            if nearest > 1_500:
+                return "doubtful"            # none of them is anywhere near
+        if not hints.within_reach(p, self.DISTRICT_M):
+            return "doubtful"                # far from every department sent
+        return "high"
 
     # How far from the dispatched departments' towns a call can plausibly be.
     DISTRICT_M = 12_000      # a whole township (Carmel = Clay Township) fits inside
@@ -799,6 +857,14 @@ class Geocoder:
                 r2 = census_geocode(f"{number} {street}, {city_hint}, {config.STATE}")
                 if r2 and self._plausible(r2, hints):
                     return r2
+                if self.tiger:
+                    # "2811 Haroldry Drive": TIGER knows the street as Heraldry Dr but not that
+                    # number; the Census geocoder has newer ranges, so ask with the real name.
+                    known = self.tiger.match(street, hints)
+                    if known and norm_name(known[0][1]) != norm_name(street):
+                        r2 = census_geocode(f"{number} {known[0][1]}, {city_hint}, {config.STATE}")
+                        if r2 and self._plausible(r2, hints):
+                            return r2
                 if place:            # "16600 Lear Street at Clarksville Christian Church": no Lear St, but the church is known
                     p = self.places.find(place, near)
                     if p and self._plausible(p, hints):

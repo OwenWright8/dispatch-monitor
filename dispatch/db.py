@@ -62,6 +62,14 @@ CREATE INDEX IF NOT EXISTS inc_addr ON incidents(matched);
 
 CREATE TABLE IF NOT EXISTS geocache (key TEXT PRIMARY KEY, result TEXT);
 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);
+-- Places learned from earlier calls: "Independence Village" on a Fishers call was
+-- 12950 Talblick St, so the next Fishers call naming it can be placed even if the
+-- street is misheard. Keyed by department: Carmel has its own Independence Village.
+CREATE TABLE IF NOT EXISTS learned_places (
+    name TEXT NOT NULL, dept TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL,
+    matched TEXT, n INTEGER NOT NULL DEFAULT 1, updated_ms INTEGER,
+    PRIMARY KEY (name, dept)
+);
 """
 
 
@@ -81,6 +89,8 @@ def conn() -> sqlite3.Connection:
 # Columns added after the first release: (table, column, type)
 MIGRATIONS = [
     ("transmissions", "transcript_raw", "TEXT"),   # Whisper output before name fixes
+    ("incidents", "confidence", "TEXT"),           # confirmed | high | approximate | doubtful
+    ("incidents", "geo_tries", "INTEGER NOT NULL DEFAULT 0"),   # background location retries
 ]
 
 
