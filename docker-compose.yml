@@ -1,50 +1,43 @@
+# Tippecanoe Dispatch Monitor — the whole stack in one file.
+#
+#   docker compose up -d        then open http://<this machine>:8086
+#
+# Both images are prebuilt on GitHub with the speech model, AI model and county
+# map data inside, so it starts working as soon as the images are pulled
+# (~7 GB the first time). Optional settings go in a .env file next to this one
+# (see .env.example) — none are required.
 services:
 
-  poller:
-    # Pre-built image from GitHub Container Registry (recommended for Dockge)
-    # Replace GHCR_OWNER with your GitHub username, or set it in .env
-    image: ghcr.io/${GHCR_OWNER:-your-github-username}/dispatch-monitor:latest
-    # To build locally instead: comment out 'image:' above and uncomment 'build:' below
-    # build: .
-    restart: unless-stopped
-    env_file:
-      - path: .env
-        required: false        # .env is optional; defaults are baked into the image
-    environment:
-      - DB_PATH=/app/data/dispatch.db
-      - CALLS_JSON=/app/data/calls.json
-      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434/api/generate}
-      - WHISPER_MODEL=${WHISPER_MODEL:-base.en}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
-    volumes:
-      - dispatch-data:/app/data
-      - whisper-cache:/root/.cache/whisper
-    extra_hosts:
-      - "host.docker.internal:host-gateway"  # reach Ollama on the Docker host
-    healthcheck:
-      test: ["CMD", "python", "-c",
-             "import sqlite3,os; con=sqlite3.connect(os.environ['DB_PATH']); con.execute('SELECT 1'); con.close()"]
-      interval: 60s
-      timeout: 10s
-      start_period: 90s
-      retries: 3
-
-  web:
-    # dashboard.html and nginx.conf are baked into this image — no bind mounts needed
-    image: ghcr.io/${GHCR_OWNER:-your-github-username}/dispatch-monitor-web:latest
-    # To build locally instead: comment out 'image:' above and uncomment 'build:' below
-    # build:
-    #   context: .
-    #   dockerfile: Dockerfile.web
+  app:
+    image: ghcr.io/owenwright8/dispatch-monitor:latest
+    # build: .                  # uncomment to build from source instead
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-8086}:80"
+      - "${WEB_PORT:-8086}:8080"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - OLLAMA_URL=http://ollama:11434
     volumes:
-      - dispatch-data:/usr/share/nginx/html/data:ro  # live calls.json from poller
+      - dispatch-data:/data     # database and saved audio clips
     depends_on:
-      poller:
+      ollama:
         condition: service_healthy
+
+  ollama:
+    image: ghcr.io/owenwright8/dispatch-monitor-ollama:latest   # Ollama + qwen2.5:7b
+    # build: { context: ., dockerfile: Dockerfile.ollama }
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama   # seeded from the image; holds any other model you pick
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 10
 
 volumes:
   dispatch-data:
-  whisper-cache:
+  ollama-models:
