@@ -1,144 +1,141 @@
-# Lafayette IN · Dispatch Monitor
+# Tippecanoe Dispatch Monitor
 
-Real-time fire/EMS dispatch monitoring for Tippecanoe County, Indiana.
-Polls [OpenMHz](https://openmhz.com), transcribes audio with Whisper, extracts call details with Ollama, and plots everything on a live heatmap dashboard.
+Listens to Tippecanoe County fire/EMS dispatch radio (via [OpenMHz](https://openmhz.com/system/tippco)),
+transcribes each transmission, works out the address and type of emergency, pins it on a map, and
+keeps statistics on where calls happen, what kind, and when.
 
----
+Monitored dispatch channels (configurable with `CHANNELS`):
 
-## Prerequisites
-
-- **Ollama** running somewhere accessible — [install guide](https://ollama.com)
-  ```bash
-  ollama pull llama3.2
-  ```
-- **Docker** + Docker Compose v2
-
----
-
-## Quick start (git clone → Docker)
-
-```bash
-git clone https://github.com/YOUR_USERNAME/dispatch-monitor.git
-cd dispatch-monitor
-
-cp .env.example .env
-# Edit .env if Ollama isn't on the same machine
-
-docker compose up -d --build
-```
-
-Open **http://localhost:8086/dashboard.html**
-
----
-
-## Dockge / Portainer (pre-built image)
-
-After the GitHub Actions workflow runs once, a pre-built image is published to GHCR.
-You can paste this compose directly into Dockge — no source code needed.
-
-```yaml
-services:
-  poller:
-    image: ghcr.io/YOUR_GITHUB_USERNAME/dispatch-monitor:latest
-    restart: unless-stopped
-    environment:
-      - OLLAMA_URL=http://host.docker.internal:11434/api/generate
-      - WHISPER_MODEL=base.en
-      - OLLAMA_MODEL=llama3.2
-      - DB_PATH=/app/data/dispatch.db
-      - CALLS_JSON=/app/data/calls.json
-    volumes:
-      - dispatch-data:/app/data
-      - whisper-cache:/root/.cache/whisper
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    healthcheck:
-      test: ["CMD", "python", "-c",
-             "import sqlite3,os; con=sqlite3.connect(os.environ['DB_PATH']); con.execute('SELECT 1'); con.close()"]
-      interval: 60s
-      timeout: 10s
-      start_period: 90s
-      retries: 3
-
-  web:
-    # dashboard.html and nginx config are baked in — no bind mounts needed
-    image: ghcr.io/YOUR_GITHUB_USERNAME/dispatch-monitor-web:latest
-    restart: unless-stopped
-    ports:
-      - "8086:80"
-    volumes:
-      - dispatch-data:/usr/share/nginx/html/data:ro
-    depends_on:
-      poller:
-        condition: service_healthy
-
-volumes:
-  dispatch-data:
-  whisper-cache:
-```
-
-> **Note:** Replace `YOUR_GITHUB_USERNAME` with your actual GitHub username.
-> To make the packages public: GitHub → your profile → Packages → select each package → Package settings → Change visibility → Public.
-
----
-
-## Environment variables
-
-| Variable | Default | Description |
+| Talkgroup | Channel | Agency |
 |---|---|---|
-| `OLLAMA_URL` | `http://host.docker.internal:11434/api/generate` | Ollama API endpoint |
-| `OLLAMA_MODEL` | `llama3.2` | Model for call extraction (`mistral`, `llama3.1`, etc.) |
-| `WHISPER_MODEL` | `base.en` | Whisper model size (`tiny.en` / `base.en` / `small.en` / `medium.en`) |
-| `WEB_PORT` | `8086` | Host port for the dashboard |
-| `DB_PATH` | `/app/data/dispatch.db` | SQLite database path (inside container) |
-| `CALLS_JSON` | `/app/data/calls.json` | JSON export path (served by nginx) |
+| 1827 | TCFD DISPATCH | Tippecanoe County / township fire |
+| 1833 | TEAS EMS DISP | Tippecanoe EMS (ambulances) |
+| 1901 | LFD DISPATCH | Lafayette Fire |
+| 2021 | WLFD DISPATCH | West Lafayette Fire |
+| 2105 | PUFD DISPATCH | Purdue Fire |
 
-All vars can be set in a `.env` file (copy `.env.example` to get started).
+## How it works
 
----
+```
+OpenMHz API ──(curl_cffi, gets past Cloudflare)──► transmissions table (work queue)
+                                                         │ newest first
+                                    faster-whisper small.en (speech → text)
+                                                         │
+                         Ollama qwen2.5:7b, JSON-schema output (fallback: keyword rules)
+                         → is it a dispatch? address, place, call type, units, patient
+                                                         │
+          local TIGER/Line street index for the county (offline, fuzzy street names,
+          house-number interpolation, intersections) → Census geocoder → Nominatim
+                                                         │
+          incident grouping: the same address within 20 min on any channel = one incident
+                                                         │
+                         SQLite ──► FastAPI ──► dashboard (map + statistics)
+```
 
-## Updating
+Things worth knowing:
+
+- **One incident, many transmissions.** A medical call is usually dispatched on TEAS EMS *and* the
+  fire department channel, and the dispatcher repeats it. These merge into one incident, so the
+  statistics aren't double-counted.
+- **Fixed call-type taxonomy** (`dispatch/taxonomy.py`): about 45 natures ("Fall", "Chest Pain",
+  "Fire Alarm", "Crash with Injuries"…) in 8 categories. The LLM must pick one, which keeps the
+  statistics consistent.
+- **Grounding.** Small models sometimes "correct" an address or invent a unit. The house number and
+  street words must actually appear in the transcript, otherwise the regex-extracted address is used.
+- **Location precision** is recorded (`address`, `intersection`, `place`, `street`). The map draws
+  street-only matches as hollow markers.
+- Live calls are processed first; history backfills behind them. Restarts lose nothing.
+
+## Dashboard
+
+`http://<host>:8086/`
+
+- **Map**: heatmap or incident markers colored by category, plus a live feed. Click an incident for
+  its transcripts, audio, and earlier incidents at the same address.
+- **Statistics**: incidents per day, by category, top call types, a weekday × hour heatmap, hour of
+  day by category, repeat locations, by ZIP, and by agency.
+- Filters (time range, category, agency, search, weekday/hour, call type, "only map area") apply to
+  everything at once. Click a chart bar or heatmap cell to filter by it. Pan the map with
+  *Only map area* on to get statistics for any neighborhood.
+- **Export CSV** downloads the filtered incidents.
+
+API docs are at `/api/docs`.
+
+## Running it
+
+### M4 Mac mini (16 GB)
+
+Run Ollama natively, since Docker on macOS can't use the GPU:
 
 ```bash
-# If running from source
-git pull && docker compose up -d --build
+brew install ollama        # or the app from ollama.com
+ollama serve &             # the app pulls qwen2.5:7b itself on first start
 
-# If using GHCR image (Dockge)
-docker compose pull && docker compose up -d
+git clone https://github.com/OwenWright8/dispatch-monitor.git && cd dispatch-monitor
+cp .env.example .env
+docker compose up -d
 ```
 
----
+Expected load: Whisper about 2 s per clip and the LLM about 2 s per dispatch. That's well under 5% of the machine for roughly 300
+transmissions a day. Memory is about 1.5 GB for the app plus about 5 GB for the 7B model while it's loaded.
 
-## Architecture
+Without Docker: `pip install -r requirements.txt && OLLAMA_URL=http://localhost:11434 python -m dispatch`
+(Python 3.10–3.13) and open http://localhost:8080.
+
+### UGREEN DXP4800 Plus (32 GB), Docker / Dockge
+
+The NAS has no GPU, so Ollama runs as a second container on the CPU. In `.env`:
 
 ```
-OpenMHz API (Tippecanoe County radio)
-    ↓ poll every 30s (cloudscraper — bypasses Cloudflare)
-Download audio MP3
-    ↓
-Whisper (base.en) — speech-to-text
-    ↓
-Regex extraction (fast path — addresses, units, call type)
-    ↓ fallback if regex incomplete
-Ollama (llama3.2) — structured JSON extraction
-    ↓
-Nominatim geocoding (with in-memory cache)
-    ↓
-SQLite  →  calls.json (refreshed every 2 min)
-    ↓
-Nginx serves dashboard.html + calls.json
-    ↓
-Browser: Leaflet heatmap, live sidebar, call detail modal
+COMPOSE_PROFILES=ollama
+OLLAMA_URL=http://ollama:11434
 ```
 
----
+then `docker compose up -d` (in Dockge, paste `docker-compose.yml` and put those two lines in its
+`.env` box). The first start downloads the 7B model (about 5 GB), the Whisper model (about 500 MB) and the county street
+data (about 3 MB), all into volumes.
 
-## Talkgroup filter
+Expected load: Whisper a few seconds per clip and the LLM about 30–60 s per dispatch on the Pentium, i.e. a
+couple of CPU-hours a day, with live calls showing up within a minute or two. If it falls behind, set
+`OLLAMA_MODEL=qwen2.5:3b` (about 2× faster, less accurate call types) or `WHISPER_MODEL=base.en`.
 
-By default the poller listens to these fire/EMS talkgroups only:
+### Pre-built image
 
-```python
-TALKGROUP_FILTER = ["LFD DISP", "WLFD DISP", "TIPCO EMS", "LFD OPS", "WLFD OPS", "EMS OPS"]
+GitHub Actions publishes `ghcr.io/owenwright8/dispatch-monitor:latest` (amd64 + arm64) on every push
+to `main`. To build locally instead, uncomment `build: .` in `docker-compose.yml`.
+
+## Configuration
+
+All settings are environment variables; see `.env.example`. The main ones:
+
+| Variable | Default | |
+|---|---|---|
+| `OLLAMA_URL` | `http://host.docker.internal:11434` | Ollama server |
+| `OLLAMA_MODEL` | `qwen2.5:7b` | pulled automatically if missing |
+| `LLM_ENABLED` | `true` | `false` = keyword rules only, no Ollama |
+| `WHISPER_MODEL` | `small.en` | `base.en` / `small.en` / `medium.en` |
+| `BACKFILL_HOURS` | `24` | history to fetch; raise it later and the gap is filled on restart |
+| `CHANNELS` | the five above | `talkgroup:agency:city-hint,…` |
+| `KEEP_AUDIO` | `true` | keep dispatch clips (about 100 KB each) in `/data/audio` |
+| `INCIDENT_WINDOW_MIN` | `20` | transmissions merge into one incident within this window |
+| `WEB_PORT` | `8086` | host port |
+| `CARTO_API_KEY` | empty | [CARTO basemaps](https://carto.com/basemaps) key for the dark/light map style; empty = OpenStreetMap tiles |
+
+## Maintenance
+
+```bash
+# Re-run extraction + geocoding over every stored transcript, e.g. after changing the
+# model, prompt, or taxonomy, or after an Ollama outage left calls on keyword rules:
+docker compose exec app python -m dispatch reprocess
+
+# Back up: everything lives in the dispatch-data volume (/data/dispatch.db + /data/audio)
 ```
 
-Check [OpenMHz → tippco](https://openmhz.com/system/tippco) for the exact tag names and adjust `TALKGROUP_FILTER` in `poller.py` as needed.
+## Caveats
+
+- OpenMHz is a free community service behind Cloudflare. The app identifies as a browser via
+  `curl_cffi`, polls every 20 s, and pages history gently. If Cloudflare changes and polling fails, the
+  header shows **Feed error**. Updating `curl_cffi` usually fixes it.
+- Radio transcription is imperfect. Expect a share of incidents with a misheard street or an
+  "Other" call type. The detail view shows the transcript and audio so you can judge.
+- Whisper occasionally misses the start of a clip or invents words on very noisy audio.
