@@ -163,6 +163,27 @@ summaries, patient age/sex, units) for 7 days; and the incident itself (call typ
 time) for 365 days, which is what the statistics use. `python -m dispatch reprocess` rebuilds only the
 incidents that still have transcripts.
 
+## Corrections (teach it)
+
+Open any incident and click **Something wrong? Correct it** to fix:
+- the call type
+- the location (type the right address or **pick it on the map**)
+- the units and departments sent
+- misheard words, e.g. heard "Tablix", should be "Talblick"
+
+The fix shows right away and is locked, so later transmissions, retries and `reprocess` won't undo it. The
+app also learns from it:
+
+- **Locations:** the corrected spot is remembered for the address and place name heard on that call, per
+  department. The next call with the same (mis)heard address goes straight there.
+- **Call types:** corrected calls become worked examples the AI sees for similar transcripts.
+- **Misheard words:** applied to every new transcript before anything else reads it.
+- **Units:** the departments follow the corrected units, and a unit number no department's pattern covers
+  is learned for the call's department ("Battalion 304" → Carmel Fire).
+
+Settings lists what it has learned, with **remove** for anything that turns out wrong. Saving needs
+`ADMIN_PASSWORD` when one is set.
+
 ## Versions
 
 Releases are tagged `vMAJOR.MINOR.PATCH` and listed on the GitHub *Releases* page with what changed. Each
@@ -181,6 +202,7 @@ in the dashboard:
 | `OLLAMA_URL` ⚙ | `http://ollama:11434` | point at an Ollama installed on the host (e.g. `http://host.docker.internal:11434`) to use its GPU |
 | `OLLAMA_MODEL` ⚙ | `qwen2.5:7b` | pulled automatically if missing |
 | `LLM_ENABLED` ⚙ | `true` | `false` = keyword rules only, no Ollama |
+| `WHISPER_URL` ⚙ | empty | a [whisper-asr-webservice](https://github.com/ahmetoner/whisper-asr-webservice) on a GPU (e.g. `large-v3`); the built-in model takes over if it's down |
 | `WHISPER_MODEL` ⚙ | `small.en` | `base.en` / `small.en` / `medium.en` |
 | `BACKFILL_HOURS` | `24` | history to load in the background on first start; `0` = live only. More can be loaded from the dashboard. |
 | `CHANNELS` | the county profile's | `talkgroup:label:city-hint,…`; a label naming a department credits it |

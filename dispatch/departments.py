@@ -44,7 +44,8 @@ def normalize(transcript: str) -> str:
     if not transcript:
         return transcript
     fixes, names, _ = _compiled()
-    t = transcript
+    from .corrections import apply_word_fixes
+    t = apply_word_fixes(transcript)            # "heard -> actually" fixes added in the dashboard
     for _ in range(2):       # second pass: "T.E.'s about to go on fire" only reads as TEAS once Battle Ground is fixed
         for rx, d in names:
             if d.spoken:
@@ -89,6 +90,8 @@ def _keep_lead(spoken: str):
     """Replacement that keeps any leading punctuation/space a regex consumed."""
     def rep(m: re.Match) -> str:
         lead = re.match(r"^\W*(?:attention,?\s+)?", m.group(0), re.I).group(0)
+        if m.group(0)[len(lead):].lower() == spoken.lower():
+            return m.group(0)               # already right; don't rewrite (keeps fixes idempotent)
         return lead + spoken
     return rep
 
@@ -101,7 +104,12 @@ _BARE_NUM = re.compile(r"^\D*?(\d{2,4})\D*$")
 
 
 def _by_unit_number(num: str) -> Department | None:
-    """'1305' -> the department whose pattern ('13xx') fits; the most specific pattern wins."""
+    """'1305' -> the department whose pattern ('13xx') fits; the most specific pattern wins.
+    A unit a correction in the dashboard assigned to a department wins over the patterns."""
+    from .corrections import unit_owner
+    owner = unit_owner(num)
+    if owner:
+        return config.PROFILE.department(owner) or Department(owner)
     best = None
     for d in config.PROFILE.departments:
         for pat in d.unit_prefixes:
@@ -137,10 +145,17 @@ def detect(transcript: str, units: list[str] | None = None, channel=None) -> lis
             m = _BARE_NUM.match(u)
             if m:
                 nums.append(m.group(1))
-        for n in nums:
-            d = _by_unit_number(n)
-            if d:
-                add(d.name)
+        # Full unit numbers ("Engine 383") are strong evidence; two-digit ones are weak:
+        # crews do shorten ("Ladder 72" = 372) but Whisper also drops digits
+        # ("Engine 33" for Engine 383). A weak one only counts on its own or
+        # when it agrees with the full numbers on the same call.
+        strong = [d.name for n in nums if len(n) >= 3 for d in [_by_unit_number(n)] if d]
+        weak = [d.name for n in nums if len(n) < 3 for d in [_by_unit_number(n)] if d]
+        for name in strong:
+            add(name)
+        for name in weak:
+            if not strong or name in strong:
+                add(name)
     if channel is not None and channel.default_department:
         add(channel.default_department)     # the Lafayette FD channel always dispatches Lafayette FD
     return found

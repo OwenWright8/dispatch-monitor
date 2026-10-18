@@ -68,8 +68,12 @@ DEPARTMENTS = (
         aliases=(r"\b(?:randolph|randall|randle|randolf|rudolph|random|romney)" + FIRE,),
     ),
     Department(
-        "Clarks Hill Fire", spoken="Clarks Hill Fire", towns=("clarks hill", "stockwell"), unit_prefixes=("12xx", "8xx"), area="Lauramie Township",
-        aliases=(r"\b(?:clarks?'?\s?hill|clark'?s hill|clarkshill|clark hill)" + FIRE,),
+        "Clarks Hill Fire", spoken="Clarks Hill Lauramie Fire", towns=("clarks hill", "stockwell"),
+        unit_prefixes=("12xx", "8xx"), area="Lauramie Township",
+        # toned out as "Clarks Hill Lauramie Fire"; Whisper hears "Clarks Hill Army Fire"
+        aliases=(r"\b(?:clarks?'?\s?hill|clark'?s hill|clarkshill|clark hill)(?:[\s,-]+(?:lauramie|laramie|lorami|"
+                 r"loramie|lauren?ie|army|army's|ramie|la ?ramie|lorraine|laurie|lori|mommy))?" + FIRE,
+                 r"(?<!hill )(?<!hill, )\b(?:lauramie|laramie|loramie|lorami)" + FIRE),
     ),
     Department(
         "Otterbein Fire", spoken="Otterbein Fire", towns=("otterbein",), unit_prefixes=("13xx",), area="Shelby Township / Otterbein",
@@ -125,7 +129,7 @@ PROFILE = Profile(
     whisper_prompt=(
         "Tippecanoe County fire and EMS dispatch, Lafayette and West Lafayette, Indiana. "
         "TEAS, Wea Fire, Wabash Fire, Shadeland Fire, Sheffield Fire, Buck Creek Fire, Battle Ground Fire, "
-        "Otterbein Fire, Randolph Fire, Clarks Hill Fire, West Point Fire. "
+        "Otterbein Fire, Randolph Fire, Clarks Hill Lauramie Fire, West Point Fire. "
         "Station 1, Engine 1502, Medic 5, Westside Medic, Central Medic, Battalion 14. "
         "Medical run, lift assist, stand by for dispatch, go channel 2, tone time 1417. "
         "North Salisbury Street, Sagamore Parkway, Teal Road, Creasy Lane, Greenbush Street, Kossuth Street, "

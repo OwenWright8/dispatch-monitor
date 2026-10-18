@@ -20,8 +20,8 @@ import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from . import config, db, departments, extract, openmhz, settings, transcribe
-from .geo import Geocoder, GeoResult, Hints, parse_cross_streets
+from . import config, corrections, db, departments, extract, openmhz, settings, transcribe
+from .geo import Geocoder, GeoResult, Hints, _dist_m, learn_key, parse_cross_streets
 from .taxonomy import category_for
 
 log = logging.getLogger(__name__)
@@ -229,8 +229,11 @@ def attach(time_ms: int, depts: list[str], fields: dict, geo: GeoResult | None, 
     for row in rows:
         if not _same_incident(row, fields, geo):
             continue
-        agencies = _merge_agencies(json.loads(row["agencies"]), depts)
-        units = list(dict.fromkeys(json.loads(row["units"]) + fields.get("units", [])))
+        locked = set((row["corrected"] or "").split(","))     # fields a person fixed in the dashboard
+        agencies = (json.loads(row["agencies"]) if "departments" in locked
+                    else _merge_agencies(json.loads(row["agencies"]), depts))
+        units = (json.loads(row["units"]) if "units" in locked
+                 else list(dict.fromkeys(json.loads(row["units"]) + fields.get("units", []))))
         upd = {
             "first_ms": min(row["first_ms"], time_ms), "last_ms": max(row["last_ms"], time_ms),
             "agencies": json.dumps(agencies), "units": json.dumps(units), "n_tx": row["n_tx"] + 1,
@@ -239,19 +242,13 @@ def attach(time_ms: int, depts: list[str], fields: dict, geo: GeoResult | None, 
             "patient_sex": row["patient_sex"] or fields.get("patient_sex"),
             "summary": row["summary"] or fields.get("summary"),
         }
-        if (row["nature"].startswith("Other") and not nature.startswith("Other")
-                or nature in _ESCALATES.get(row["nature"], ())):
+        if "nature" not in locked and (row["nature"].startswith("Other") and not nature.startswith("Other")
+                                       or nature in _ESCALATES.get(row["nature"], ())):
             upd["nature"], upd["category"] = nature, category_for(nature)
-        if geo and PRECISION_RANK.get(geo.precision, 0) > PRECISION_RANK.get(row["precision"], 0):
-            upd.update(lat=geo.lat, lon=geo.lon, precision=geo.precision, matched=geo.matched,
-                       zip=geo.zip, geo_source=geo.source)
-        elif geo and row["lat"] is not None and geo.precision == row["precision"]:
-            # The pre-alert said "690 Washington Street", the tone-out "690 Waldron Street":
-            # keep whichever is clearly in the dispatched departments' area.
-            h = Hints(_department_towns(agencies)[1])
-            if h.anchors and h.anchor_dist((geo.lat, geo.lon)) + 1_000 < h.anchor_dist((row["lat"], row["lon"])):
-                upd.update(lat=geo.lat, lon=geo.lon, matched=geo.matched, zip=geo.zip, geo_source=geo.source,
-                           address=fields.get("address") or row["address"])
+        if geo and _better_location(geo, row, agencies):
+            upd.update(lat=geo.lat, lon=geo.lon, precision=geo.precision, matched=geo.matched, zip=geo.zip,
+                       geo_source=geo.source, confidence=geo.confidence,
+                       address=fields.get("address") or row["address"])
         lt = _local(upd["first_ms"])
         upd.update(local_date=lt.strftime("%Y-%m-%d"), local_hour=lt.hour, local_dow=lt.weekday())
         c.execute(f"UPDATE incidents SET {', '.join(f'{k}=?' for k in upd)} WHERE id=?",
@@ -261,13 +258,38 @@ def attach(time_ms: int, depts: list[str], fields: dict, geo: GeoResult | None, 
     cur = c.execute(
         "INSERT INTO incidents(first_ms, last_ms, local_date, local_hour, local_dow, address, place, matched, "
         "lat, lon, precision, geo_source, zip, category, nature, agencies, units, patient_age, patient_sex, "
-        "summary, n_tx, method) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)",
+        "summary, n_tx, method, confidence) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
         (time_ms, time_ms, lt.strftime("%Y-%m-%d"), lt.hour, lt.weekday(), fields.get("address"),
          fields.get("place"), geo.matched if geo else None, geo.lat if geo else None, geo.lon if geo else None,
          geo.precision if geo else None, geo.source if geo else None, geo.zip if geo else None,
          category_for(nature), nature, json.dumps(_merge_agencies([], depts)), json.dumps(fields.get("units", [])),
-         fields.get("patient_age"), fields.get("patient_sex"), fields.get("summary"), method))
+         fields.get("patient_age"), fields.get("patient_sex"), fields.get("summary"), method,
+         geo.confidence if geo else None))
     return cur.lastrowid
+
+
+CONFIDENCE_RANK = {"confirmed": 3, "high": 2, "approximate": 1, "doubtful": 0, "": 1, None: 1}
+
+
+def _better_location(geo: GeoResult, row, agencies: list[str]) -> bool:
+    """Should a new geocode replace the incident's current location?"""
+    if row["geo_source"] == "manual":
+        return False                 # set by a person in the dashboard
+    if row["lat"] is None:
+        return True
+    old_p, new_p = PRECISION_RANK.get(row["precision"], 0), PRECISION_RANK.get(geo.precision, 0)
+    old_c, new_c = CONFIDENCE_RANK.get(row["confidence"], 1), CONFIDENCE_RANK.get(geo.confidence, 1)
+    if row["confidence"] == "doubtful" and new_c > old_c:
+        return True                  # anything sure beats a pin that contradicts its own call
+    if new_p != old_p:
+        # more precise wins, unless that would trade a sure pin for a doubtful one
+        return new_p > old_p and new_c >= min(old_c, CONFIDENCE_RANK["high"])
+    if new_c != old_c:
+        return new_c > old_c
+    # Same precision and confidence: the pre-alert said "690 Washington Street", the tone-out
+    # "690 Waldron Street"; keep whichever is clearly in the dispatched departments' area.
+    h = Hints(_department_towns(agencies)[1])
+    return bool(h.anchors) and h.anchor_dist((geo.lat, geo.lon)) + 1_000 < h.anchor_dist((row["lat"], row["lon"]))
 
 
 # ─────────────────────────────────────────────
@@ -333,9 +355,51 @@ def handle_transcript(tx, transcript: str, use_llm: bool = True) -> tuple[dict, 
         city = town or (ch.city_hint if ch else config.PROFILE.name)
         if not anchors and ch:
             anchors = [c for c in [config.PROFILE.city_centers.get(ch.city_hint.lower())] if c]
-        geo = geocoder().geocode(fields["address"], fields["place"], city, anchors, fields["cross_streets"])
+        known = known_place(fields["place"], fields["departments"], fields["address"])
+        geo = geocoder().geocode(fields["address"], fields["place"], city, anchors, fields["cross_streets"],
+                                 known=known)
     inc = attach(tx["time_ms"], fields["departments"], fields, geo, method)
+    if inc:
+        learn_place(inc)
     return fields, method, inc
+
+
+def known_place(place: str | None, depts: list[str], address: str | None = None) -> GeoResult | None:
+    """Where this address or place was on earlier calls for one of these departments:
+    a location a person corrected in the dashboard, or a place learned from a confident call."""
+    if not depts:
+        return None
+    for key in [k for k in (corrections.addr_key(address), learn_key(place)) if k]:
+        row = db.conn().execute(
+            f"SELECT lat, lon, matched, n FROM learned_places WHERE name=? AND n > 0 "
+            f"AND dept IN ({','.join('?' * len(depts))}) ORDER BY n DESC LIMIT 1", (key, *depts)).fetchone()
+        if row and (row["n"] >= corrections.MANUAL or not key.startswith("addr:")):
+            return GeoResult(row["lat"], row["lon"], "place", row["matched"] or place, None,
+                             "manual" if row["n"] >= corrections.MANUAL and key.startswith("addr:") else "learned")
+    return None
+
+
+def learn_place(inc_id: int):
+    """Remember a named place once a call puts it somewhere we're sure of."""
+    c = db.conn()
+    r = c.execute("SELECT place, matched, lat, lon, precision, confidence, agencies FROM incidents WHERE id=?",
+                  (inc_id,)).fetchone()
+    key = learn_key(r["place"]) if r else ""
+    if not key or r["lat"] is None or r["confidence"] not in ("confirmed", "high")             or r["precision"] not in ("address", "place"):
+        return
+    now = int(time.time() * 1000)
+    for dept in json.loads(r["agencies"]):
+        old = c.execute("SELECT lat, lon, n FROM learned_places WHERE name=? AND dept=?", (key, dept)).fetchone()
+        if old and old["n"] >= corrections.MANUAL:
+            continue                        # a person set this one; don't second-guess it
+        if not old:
+            c.execute("INSERT INTO learned_places(name, dept, lat, lon, matched, n, updated_ms) VALUES (?,?,?,?,?,1,?)",
+                      (key, dept, r["lat"], r["lon"], r["matched"], now))
+        elif old["n"] > 0 and _dist_m((old["lat"], old["lon"]), (r["lat"], r["lon"])) < 300:
+            c.execute("UPDATE learned_places SET n = n + 1, updated_ms=? WHERE name=? AND dept=?", (now, key, dept))
+        elif old["n"] > 0:
+            # Same name, somewhere else (Fishers has two "Independence Village"s): stop trusting the name.
+            c.execute("UPDATE learned_places SET n = -1, updated_ms=? WHERE name=? AND dept=?", (now, key, dept))
 
 
 def _department_towns(names: list[str]) -> tuple[str | None, list]:
@@ -456,7 +520,70 @@ def housekeeping_loop(stop: threading.Event):
             housekeeping()
         except Exception as e:
             log.warning(f"Retention cleanup failed: {e}")
+        try:
+            retry_locations()
+        except Exception as e:
+            log.warning(f"Location retry failed: {e}")
         stop.wait(900)
+
+
+# ─────────────────────────────────────────────
+# Location retries
+# ─────────────────────────────────────────────
+RETRY_HOURS = 24        # keep trying a call's location for this long
+RETRY_MAX = 12          # attempts per incident (one per 15-minute pass)
+
+
+def retry_locations(limit: int = 40) -> int:
+    """Re-geocode recent incidents that are unmapped, approximate or doubtful.
+
+    Each attempt tries every transmission's version of the address (the pre-alert
+    and the tone-out often word it differently), skips cached "not found" answers
+    so online geocoders that were down get asked again, and keeps the result only
+    if it is better than what the incident has."""
+    c = db.conn()
+    since = int((time.time() - RETRY_HOURS * 3600) * 1000)
+    rows = c.execute(
+        "SELECT * FROM incidents WHERE first_ms >= ? AND geo_tries < ? AND corrected NOT LIKE '%location%' "
+        "AND (lat IS NULL OR precision='street' OR confidence IN ('approximate', 'doubtful')) "
+        "ORDER BY first_ms DESC LIMIT ?",
+        (since, RETRY_MAX, limit)).fetchall()
+    improved = 0
+    for row in rows:
+        c.execute("UPDATE incidents SET geo_tries = geo_tries + 1 WHERE id=?", (row["id"],))
+        agencies = json.loads(row["agencies"])
+        town, anchors = _department_towns(agencies)
+        cands, cross = [], []
+        for tx in c.execute("SELECT talkgroup, transcript, extracted FROM transmissions WHERE incident_id=? "
+                            "ORDER BY time_ms", (row["id"],)).fetchall():
+            f = json.loads(tx["extracted"] or "{}")
+            rules = extract.rules_extract(tx["transcript"] or "")
+            for a, p in ((f.get("address"), f.get("place")), (rules["address"], rules["place"] or f.get("place"))):
+                if (a or p) and (a, p) not in cands:
+                    cands.append((a, p))
+            cross += [x for x in f.get("cross_streets") or [] if x not in cross]
+            ch = config.CHANNELS.get(tx["talkgroup"])
+            if not anchors and ch:
+                anchors = [x for x in [config.PROFILE.city_centers.get(ch.city_hint.lower())] if x]
+                town = town or ch.city_hint
+        best = None
+        for a, p in cands:
+            geo = geocoder().geocode(a, p, town or config.PROFILE.name, anchors, cross, fresh=True,
+                                     known=known_place(p, agencies, a))
+            if geo and (best is None or _better_location(geo, _as_row(best), agencies)):
+                best = geo
+        if best and _better_location(best, row, agencies):
+            c.execute("UPDATE incidents SET lat=?, lon=?, precision=?, matched=?, zip=?, geo_source=?, confidence=? "
+                      "WHERE id=?", (best.lat, best.lon, best.precision, best.matched, best.zip, best.source,
+                                     best.confidence, row["id"]))
+            improved += 1
+            learn_place(row["id"])
+            log.info(f"Location retry: incident #{row['id']} now {best.matched} ({best.precision}, {best.confidence})")
+    return improved
+
+
+def _as_row(g: GeoResult) -> dict:
+    return {"lat": g.lat, "lon": g.lon, "precision": g.precision, "confidence": g.confidence, "geo_source": g.source}
 
 
 def reprocess(use_llm: bool = True):
@@ -485,4 +612,7 @@ def reprocess(use_llm: bool = True):
                   (transcript, raw, method, json.dumps(fields), int(bool(fields["is_dispatch"])), inc, tx["id"]))
         if i % 50 == 0:
             log.info(f"  {i}/{len(rows)}")
+    n = corrections.reapply_all()
+    if n:
+        log.info(f"Re-applied dashboard corrections to {n} incidents")
     log.info(f"Done: {c.execute('SELECT COUNT(*) FROM incidents').fetchone()[0]} incidents")

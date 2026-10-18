@@ -26,7 +26,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, db, openmhz, pipeline, settings
+from . import config, corrections, db, openmhz, pipeline, settings, transcribe
 from .taxonomy import CATEGORIES, TAXONOMY
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -130,7 +130,8 @@ def status():
         "poll_failures": s["poll_failures"], "next_poll": s["next_poll"], "feed_identity": openmhz.identity(),
         "last_processed": s["last_processed"],
         "llm": {"enabled": settings.get("LLM_ENABLED"), "model": settings.get("OLLAMA_MODEL"), "ok": s["llm_ok"], "error": s["llm_error"]},
-        "whisper_model": settings.get("WHISPER_MODEL"),
+        "whisper_model": "speech-to-text server" if settings.get("WHISPER_URL") and transcribe.remote_status["ok"] is not False else settings.get("WHISPER_MODEL"),
+        "whisper_server": transcribe.remote_status,
         "backfill": s["backfill"],
         "now": time.time(),
     }
@@ -141,13 +142,52 @@ def get_settings():
     return {"settings": settings.describe(), "locked": bool(settings.ADMIN_PASSWORD), "version": config.VERSION}
 
 
+def _require_admin(req: Request):
+    if settings.ADMIN_PASSWORD and not hmac.compare_digest(
+            req.headers.get("x-admin-password", ""), settings.ADMIN_PASSWORD):
+        raise HTTPException(401, "Wrong or missing admin password")
+
+
+@app.put("/api/incidents/{inc_id}")
+async def correct_incident(inc_id: int, req: Request):
+    """Fix an incident and teach the app. Body (all optional):
+    {"nature": "Fire Alarm", "address": "12950 Talblick St", "lat": .., "lon": .. (a point picked on
+    the map), "departments": ["Fishers Fire"], "word_fixes": [{"heard": "Tablix", "actual": "Talblick"}]}"""
+    _require_admin(req)
+    body = await req.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Expected a JSON object")
+    try:
+        changed = corrections.correct(inc_id, body)
+    except LookupError:
+        raise HTTPException(404)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+    return {"changed": changed, "incident": incident(inc_id)}
+
+
+@app.get("/api/learned")
+def learned():
+    """What the app learned from corrections: word fixes, corrected locations, call-type examples."""
+    return corrections.learned()
+
+
+@app.delete("/api/learned")
+def forget(req: Request, kind: str, key: str, dept: str | None = None):
+    _require_admin(req)
+    try:
+        if not corrections.forget(kind, key, dept):
+            raise HTTPException(404)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
 @app.put("/api/settings")
 async def put_settings(req: Request):
     """Body: {"KEY": value, ...}; null resets a setting to its default.
     With ADMIN_PASSWORD set, send it in the X-Admin-Password header."""
-    if settings.ADMIN_PASSWORD and not hmac.compare_digest(
-            req.headers.get("x-admin-password", ""), settings.ADMIN_PASSWORD):
-        raise HTTPException(401, "Wrong or missing admin password")
+    _require_admin(req)
     body = await req.json()
     if not isinstance(body, dict):
         raise HTTPException(400, "Expected a JSON object")
@@ -183,7 +223,7 @@ def incidents(req: Request, limit: int = Query(5000, le=50000)):
     w, a = where(req)
     rows = db.conn().execute(
         f"SELECT id, first_ms, local_date, local_hour, local_dow, address, place, matched, lat, lon, precision, zip, "
-        f"category, nature, agencies, units, patient_age, patient_sex, summary, n_tx "
+        f"category, nature, agencies, units, patient_age, patient_sex, summary, n_tx, confidence, corrected "
         f"FROM incidents{w} ORDER BY first_ms DESC LIMIT ?", (*a, limit)).fetchall()
     return [_incident(r) for r in rows]
 
