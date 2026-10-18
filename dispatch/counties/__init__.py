@@ -32,6 +32,10 @@ class Department:
     # any digit: ("4xx",) = 400-499, ("13xx",) = 1300-1399, ("34x",) = 340-349.
     unit_prefixes: tuple[str, ...] = ()
     area: str = ""                  # what it covers, shown in the dashboard
+    # Towns it covers (keys of Profile.city_centers). Addresses on its calls are
+    # looked up near these first: "101 W Main St" for Jackson Township is in
+    # Arcadia, not Carmel.
+    towns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,11 @@ class Profile:
     # Extra (regex, replacement) transcript fixes beyond department names.
     transcript_fixes: tuple[tuple[str, str], ...] = ()
     unit_examples: str = '"Station 3", "Engine 1502", "Medic 5"'
+    # Worked examples of this county's dispatch style for the LLM:
+    # ((transcript, expected JSON fields), ...)
+    examples: tuple = ()
+    # Hospitals units transport to ("en route to Riverview with one" is not a call there).
+    hospitals: tuple[str, ...] = ()
 
     # ── helpers ─────────────────────────────────────────────────────────
     def department(self, name: str | None) -> Department | None:

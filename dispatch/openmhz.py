@@ -25,31 +25,82 @@ log = logging.getLogger(__name__)
 
 _local = threading.local()
 
+# Browser identities to present to Cloudflare, newest first. When one gets
+# challenged the client moves to the next, so a fingerprint Cloudflare starts
+# rejecting heals itself without an update. Names that this curl_cffi version
+# doesn't know are skipped.
+IMPERSONATE = ("chrome", "chrome146", "chrome142", "safari184", "firefox147", "edge101", "chrome131", "safari180")
+_identity = {"i": 0}
+_identity_lock = threading.Lock()
+
+
+class Challenged(RuntimeError):
+    """Cloudflare answered with a challenge page instead of data."""
+
 
 def _session() -> cr.Session:
     # curl_cffi sessions are not thread-safe; poller and worker each get one.
     s = getattr(_local, "s", None)
-    if s is None:
-        s = _local.s = cr.Session(impersonate="chrome")
+    if s is None or getattr(_local, "i", None) != _identity["i"]:
+        for _ in range(len(IMPERSONATE)):
+            try:
+                s = cr.Session(impersonate=IMPERSONATE[_identity["i"]])
+                break
+            except Exception:
+                _rotate(log_it=False)              # unknown to this curl_cffi version
+        _local.s, _local.i = s, _identity["i"]
     return s
+
+
+def _rotate(log_it: bool = True):
+    with _identity_lock:
+        _identity["i"] = (_identity["i"] + 1) % len(IMPERSONATE)
+        if log_it:
+            log.info(f"OpenMHz: switching browser identity to {IMPERSONATE[_identity['i']]}")
+    _local.s = None
+
+
+def identity() -> str:
+    return IMPERSONATE[_identity["i"]]
+
+
+def _challenged(r) -> bool:
+    return r.status_code in (403, 503) and ("Just a moment" in r.text or "cf-chl" in r.text or
+                                            "challenge" in r.text.lower()[:2000])
 
 
 def _filter() -> dict:
     return {"filter-type": "talkgroup", "filter-code": ",".join(str(t) for t in settings.enabled_channels()) or "0"}
 
 
+def _request(url: str, timeout: int, **params):
+    """GET with Cloudflare recovery: a fresh session first, then other browser identities."""
+    last = None
+    for attempt in range(4):
+        try:
+            r = _session().get(url, params=params or None, timeout=timeout)
+        except Exception as e:                      # connection reset, TLS error: new session, then identity
+            last = e
+            if attempt == 0:
+                _local.s = None
+            else:
+                _rotate()
+        else:
+            if not _challenged(r):
+                r.raise_for_status()
+                return r
+            last = Challenged("OpenMHz Cloudflare challenge")
+            if attempt == 0:
+                _local.s = None                     # often enough: same identity, fresh cookies
+            else:
+                _rotate()
+        time.sleep(2 + attempt * 4)
+    raise last if isinstance(last, Challenged) else RuntimeError(f"OpenMHz unreachable: {last}")
+
+
 def _get(path: str, **params) -> dict:
     url = f"{config.OPENMHZ_API}/{config.OPENMHZ_SYSTEM}{path}"
-    # Cloudflare challenges the odd request even with impersonation; a fresh
-    # session after a short pause almost always gets through.
-    for attempt in range(4):
-        r = _session().get(url, params={**params, **_filter()}, timeout=20)
-        if not (r.status_code == 403 and "Just a moment" in r.text):
-            r.raise_for_status()
-            return r.json()
-        _local.s = None
-        time.sleep(3 + attempt * 5)
-    raise RuntimeError("OpenMHz Cloudflare challenge not bypassed (curl_cffi impersonation may need updating)")
+    return _request(url, 20, **params, **_filter()).json()
 
 
 def to_ms(iso: str) -> int:
@@ -65,8 +116,7 @@ def older(time_ms: int) -> list[dict]:
 
 
 def download(url: str) -> bytes:
-    r = _session().get(url, timeout=60)
-    r.raise_for_status()
+    r = _request(url, 60)
     if r.headers.get("content-type", "").startswith("text/html"):
         raise RuntimeError(f"Got HTML instead of audio for {url}")
     return r.content
@@ -74,6 +124,4 @@ def download(url: str) -> bytes:
 
 def talkgroups() -> dict:
     url = f"{config.OPENMHZ_API}/{config.OPENMHZ_SYSTEM}/talkgroups"
-    r = _session().get(url, timeout=20)
-    r.raise_for_status()
-    return r.json().get("talkgroups", {})
+    return _request(url, 20).json().get("talkgroups", {})
