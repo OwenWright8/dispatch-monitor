@@ -232,7 +232,8 @@ def attach(time_ms: int, depts: list[str], fields: dict, geo: GeoResult | None, 
         locked = set((row["corrected"] or "").split(","))     # fields a person fixed in the dashboard
         agencies = (json.loads(row["agencies"]) if "departments" in locked
                     else _merge_agencies(json.loads(row["agencies"]), depts))
-        units = list(dict.fromkeys(json.loads(row["units"]) + fields.get("units", [])))
+        units = (json.loads(row["units"]) if "units" in locked
+                 else list(dict.fromkeys(json.loads(row["units"]) + fields.get("units", []))))
         upd = {
             "first_ms": min(row["first_ms"], time_ms), "last_ms": max(row["last_ms"], time_ms),
             "agencies": json.dumps(agencies), "units": json.dumps(units), "n_tx": row["n_tx"] + 1,

@@ -168,7 +168,7 @@ incidents that still have transcripts.
 Open any incident and click **Something wrong? Correct it** to fix:
 - the call type
 - the location (type the right address or **pick it on the map**)
-- the departments sent
+- the units and departments sent
 - misheard words, e.g. heard "Tablix", should be "Talblick"
 
 The fix shows right away and is locked, so later transmissions, retries and `reprocess` won't undo it. The
@@ -178,6 +178,8 @@ app also learns from it:
   department. The next call with the same (mis)heard address goes straight there.
 - **Call types:** corrected calls become worked examples the AI sees for similar transcripts.
 - **Misheard words:** applied to every new transcript before anything else reads it.
+- **Units:** the departments follow the corrected units, and a unit number no department's pattern covers
+  is learned for the call's department ("Battalion 304" → Carmel Fire).
 
 Settings lists what it has learned, with **remove** for anything that turns out wrong. Saving needs
 `ADMIN_PASSWORD` when one is set.
