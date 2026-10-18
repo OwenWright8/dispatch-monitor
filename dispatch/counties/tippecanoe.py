@@ -29,7 +29,7 @@ DEPARTMENTS = (
     Department("Lafayette Fire", area="City of Lafayette", towns=("lafayette",),
                detect=(r"(?<!west )\blafayette fire\b", r"\blfd\b")),
     Department("West Lafayette Fire", area="City of West Lafayette", towns=("west lafayette",), detect=(r"\bwest lafayette fire\b", r"\bwlfd\b")),
-    Department("Purdue Fire", area="Purdue University", towns=("purdue",), detect=(r"\bpurdue fire\b",)),
+    Department("Purdue Fire", area="Purdue University", towns=("purdue",), reach_km=3, detect=(r"\bpurdue fire\b",)),
     Department(
         "Wea Township Fire", spoken="Wea Fire", towns=("wea",), unit_prefixes=("4xx",), area="Wea Township",
         aliases=(r"\b(?:wea|we all|we|wee|way|whey|weigh|we a|weah|wia|why a)" + FIRE,),
