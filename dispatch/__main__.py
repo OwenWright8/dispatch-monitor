@@ -19,6 +19,7 @@ def main():
     ap.add_argument("--out", default="/opt/bundle", help="prefetch: output directory")
     ap.add_argument("--rules", action="store_true", help="reprocess with keyword rules only")
     ap.add_argument("--no-web", action="store_true", help="run the pipeline without the HTTP server")
+    ap.add_argument("--county-only", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
@@ -27,7 +28,7 @@ def main():
     log = logging.getLogger("dispatch")
     if args.command == "prefetch":
         from . import prefetch
-        prefetch.run(args.out)
+        prefetch.run(args.out, county_only=args.county_only)
         return
 
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -37,6 +38,7 @@ def main():
         pipeline.reprocess(use_llm=not args.rules)
         return
 
+    log.info(f"County: {config.PROFILE.name}, {config.PROFILE.state} (OpenMHz system {config.OPENMHZ_SYSTEM})")
     log.info(f"Monitoring {len(config.CHANNELS)} channels: "
              + ", ".join(f"{c.agency} ({c.talkgroup})" for c in config.CHANNELS.values()))
     log.info(f"Whisper {config.WHISPER_MODEL} | LLM "
