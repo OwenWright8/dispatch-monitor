@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from . import config, db, extract, openmhz, transcribe
+from . import config, db, departments, extract, openmhz, transcribe
 from .geo import Geocoder, GeoResult
 from .taxonomy import category_for
 
@@ -184,7 +184,22 @@ def _same_incident(row, fields, geo: GeoResult | None) -> bool:
     return bool(pa and pa == pb)
 
 
-def attach(time_ms: int, agency: str, fields: dict, geo: GeoResult | None, method: str) -> int | None:
+# Channel labels used when a shared county channel names no department; dropped
+# as soon as a transmission identifies the real one.
+_PLACEHOLDERS = {ch.agency for ch in config.CHANNELS.values() if not ch.default_department}
+# A later transmission saying it's an actual fire beats the alarm it started as.
+_ESCALATES = {"Fire Alarm": {"Structure Fire"}, "Smoke Investigation": {"Structure Fire", "Other Fire",
+              "Vehicle Fire", "Brush / Grass Fire", "Outside / Trash Fire"}, "Crash": {"Crash with Injuries",
+              "Crash with Entrapment", "Pedestrian / Cyclist Struck"}, "Crash with Injuries": {"Crash with Entrapment"}}
+
+
+def _merge_agencies(old: list[str], new: list[str]) -> list[str]:
+    out = list(dict.fromkeys(old + new))
+    real = [a for a in out if a not in _PLACEHOLDERS]
+    return real or out
+
+
+def attach(time_ms: int, depts: list[str], fields: dict, geo: GeoResult | None, method: str) -> int | None:
     if not fields.get("is_dispatch") or not (fields.get("address") or fields.get("place")):
         return None
     c = db.conn()
@@ -195,7 +210,7 @@ def attach(time_ms: int, agency: str, fields: dict, geo: GeoResult | None, metho
     for row in rows:
         if not _same_incident(row, fields, geo):
             continue
-        agencies = sorted(set(json.loads(row["agencies"])) | {agency})
+        agencies = _merge_agencies(json.loads(row["agencies"]), depts)
         units = list(dict.fromkeys(json.loads(row["units"]) + fields.get("units", [])))
         upd = {
             "first_ms": min(row["first_ms"], time_ms), "last_ms": max(row["last_ms"], time_ms),
@@ -205,7 +220,8 @@ def attach(time_ms: int, agency: str, fields: dict, geo: GeoResult | None, metho
             "patient_sex": row["patient_sex"] or fields.get("patient_sex"),
             "summary": row["summary"] or fields.get("summary"),
         }
-        if row["nature"].startswith("Other") and not nature.startswith("Other"):
+        if (row["nature"].startswith("Other") and not nature.startswith("Other")
+                or nature in _ESCALATES.get(row["nature"], ())):
             upd["nature"], upd["category"] = nature, category_for(nature)
         if geo and PRECISION_RANK.get(geo.precision, 0) > PRECISION_RANK.get(row["precision"], 0):
             upd.update(lat=geo.lat, lon=geo.lon, precision=geo.precision, matched=geo.matched,
@@ -223,7 +239,7 @@ def attach(time_ms: int, agency: str, fields: dict, geo: GeoResult | None, metho
         (time_ms, time_ms, lt.strftime("%Y-%m-%d"), lt.hour, lt.weekday(), fields.get("address"),
          fields.get("place"), geo.matched if geo else None, geo.lat if geo else None, geo.lon if geo else None,
          geo.precision if geo else None, geo.source if geo else None, geo.zip if geo else None,
-         category_for(nature), nature, json.dumps([agency]), json.dumps(fields.get("units", [])),
+         category_for(nature), nature, json.dumps(_merge_agencies([], depts)), json.dumps(fields.get("units", [])),
          fields.get("patient_age"), fields.get("patient_sex"), fields.get("summary"), method))
     return cur.lastrowid
 
@@ -272,13 +288,15 @@ def _archive_path(tx) -> str:
     return str(p / f"{tx['talkgroup']}-{tx['id']}.m4a")
 
 
-def handle_transcript(tx, transcript: str) -> tuple[dict, str, int | None]:
+def handle_transcript(tx, transcript: str, use_llm: bool = True) -> tuple[dict, str, int | None]:
+    """transcript must already be normalized (departments.normalize)."""
     ch = config.CHANNELS.get(tx["talkgroup"])
-    fields, method = _extract(transcript)
+    fields, method = _extract(transcript) if use_llm else extract.extract(transcript, use_llm=False)
+    fields["departments"] = departments.detect(transcript, fields.get("units"), ch) or [ch.agency if ch else tx["agency"]]
     geo = None
     if fields["is_dispatch"] and (fields["address"] or fields["place"]):
-        geo = geocoder().geocode(fields["address"], fields["place"], ch.city_hint if ch else "Lafayette")
-    inc = attach(tx["time_ms"], tx["agency"], fields, geo, method)
+        geo = geocoder().geocode(fields["address"], fields["place"], ch.city_hint if ch else config.PROFILE.name)
+    inc = attach(tx["time_ms"], fields["departments"], fields, geo, method)
     return fields, method, inc
 
 
@@ -289,19 +307,22 @@ def process(tx):
     try:
         with open(tmp, "wb") as f:
             f.write(openmhz.download(tx["url"]))
-        transcript = transcribe.transcribe(tmp)
+        raw = transcribe.transcribe(tmp)
+        transcript = departments.normalize(raw)
         fields, method, inc = handle_transcript(tx, transcript)
         audio_path = None
         if inc and config.KEEP_AUDIO:
             audio_path = _archive_path(tx)
             shutil.move(tmp, audio_path)
-        c.execute("UPDATE transmissions SET status='done', transcript=?, method=?, extracted=?, is_dispatch=?, "
-                  "incident_id=?, audio_path=?, error=NULL WHERE id=?",
-                  (transcript, method, json.dumps(fields), int(bool(fields["is_dispatch"])), inc, audio_path, tx["id"]))
+        c.execute("UPDATE transmissions SET status='done', transcript=?, transcript_raw=?, method=?, extracted=?, "
+                  "is_dispatch=?, incident_id=?, audio_path=?, error=NULL WHERE id=?",
+                  (transcript, raw, method, json.dumps(fields), int(bool(fields["is_dispatch"])), inc, audio_path,
+                   tx["id"]))
         if inc:
-            r = c.execute("SELECT nature, matched, address, place, precision FROM incidents WHERE id=?", (inc,)).fetchone()
-            log.info(f"[{tx['agency']}] incident #{inc}: {r['nature']} @ {r['matched'] or r['address'] or r['place']}"
-                     f" ({r['precision'] or 'not mapped'})")
+            r = c.execute("SELECT nature, matched, address, place, precision, agencies FROM incidents WHERE id=?",
+                          (inc,)).fetchone()
+            log.info(f"[{', '.join(json.loads(r['agencies']))}] incident #{inc}: {r['nature']} @ "
+                     f"{r['matched'] or r['address'] or r['place']} ({r['precision'] or 'not mapped'})")
         status["last_processed"] = time.time()
     finally:
         if os.path.exists(tmp):
@@ -339,16 +360,12 @@ def reprocess(use_llm: bool = True):
                      "ORDER BY time_ms").fetchall()
     log.info(f"Re-extracting {len(rows)} transmissions")
     for i, tx in enumerate(rows, 1):
-        if use_llm:
-            fields, method, inc = handle_transcript(tx, tx["transcript"])
-        else:
-            ch = config.CHANNELS.get(tx["talkgroup"])
-            fields, method = extract.extract(tx["transcript"], use_llm=False)
-            geo = geocoder().geocode(fields["address"], fields["place"], ch.city_hint if ch else "Lafayette") \
-                if fields["is_dispatch"] else None
-            inc = attach(tx["time_ms"], tx["agency"], fields, geo, method)
-        c.execute("UPDATE transmissions SET method=?, extracted=?, is_dispatch=?, incident_id=? WHERE id=?",
-                  (method, json.dumps(fields), int(bool(fields["is_dispatch"])), inc, tx["id"]))
+        raw = tx["transcript_raw"] or tx["transcript"]       # rows from before transcript_raw existed
+        transcript = departments.normalize(raw)
+        fields, method, inc = handle_transcript(tx, transcript, use_llm=use_llm)
+        c.execute("UPDATE transmissions SET transcript=?, transcript_raw=?, method=?, extracted=?, is_dispatch=?, "
+                  "incident_id=? WHERE id=?",
+                  (transcript, raw, method, json.dumps(fields), int(bool(fields["is_dispatch"])), inc, tx["id"]))
         if i % 50 == 0:
             log.info(f"  {i}/{len(rows)}")
     log.info(f"Done: {c.execute('SELECT COUNT(*) FROM incidents').fetchone()[0]} incidents")

@@ -73,6 +73,7 @@ h1 { font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
 .chip.off { opacity: .45; }
 select, input[type=search] { border: 1px solid var(--grid); background: var(--surface); border-radius: 7px; padding: 4px 8px; font-size: 13px; }
 input[type=search] { width: 200px; }
+#agencySel { max-width: 240px; text-overflow: ellipsis; }
 .toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--ink-2); cursor: pointer; }
 .active-filters { display: flex; gap: 6px; flex-wrap: wrap; }
 .tag { font-size: 12px; background: var(--surface-2); border-radius: 6px; padding: 2px 4px 2px 8px; display: inline-flex; gap: 4px; align-items: center; }
@@ -179,6 +180,21 @@ tr.click { cursor: pointer; } tr.click:hover td { background: var(--surface-2); 
 .tx p { font-size: 13px; color: var(--ink-2); }
 .tx audio { width: 100%; height: 32px; margin-top: 6px; }
 .prec { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--surface-2); color: var(--ink-2); margin-left: 6px; }
+.tx .raw { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.tx .raw summary { cursor: pointer; }
+
+/* department badges */
+.depts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.dept { font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 4px; background: var(--surface-2); color: var(--ink-2); white-space: nowrap; box-shadow: inset 2px 0 0 var(--c-other); }
+.dept.ems { box-shadow: inset 2px 0 0 var(--c-medical); }
+.dept.fire { box-shadow: inset 2px 0 0 var(--c-fire); }
+.item .body .depts { white-space: normal; }
+.new-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; color: var(--surface); background: var(--stale); border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: 1px; }
+.item.fresh { background: color-mix(in srgb, var(--stale) 6%, transparent); }
+.day-sep { position: sticky; top: 0; z-index: 1; background: var(--surface-2); color: var(--ink-2); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: 4px 14px; border-bottom: 1px solid var(--grid); }
+.pulse { border-radius: 50%; animation: pulse 1.6s ease-out infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--stale) 70%, transparent); } 100% { box-shadow: 0 0 0 18px transparent; } }
+@media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
 
 .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--surface); color: var(--ink); }
 .leaflet-container { font: 13px var(--sans); }
@@ -196,7 +212,7 @@ tr.click { cursor: pointer; } tr.click:hover td { background: var(--surface-2); 
   .span-8, .span-6, .span-4 { grid-column: span 12; }
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hero .value { font-size: 36px; }
-  input[type=search] { width: 100%; }
+  input[type=search], #agencySel { width: 100%; max-width: 100%; }
   .stats { padding: 16px 16px; }
   .hm { grid-template-columns: 30px repeat(24, minmax(0, 1fr)); gap: 1px; }
   .hm .cell { min-height: 10px; }
@@ -210,8 +226,8 @@ tr.click { cursor: pointer; } tr.click:hover td { background: var(--surface-2); 
 
 <header>
   <div>
-    <h1>Tippecanoe Dispatch Monitor</h1>
-    <div class="sub" id="channelsLine">Fire &amp; EMS dispatch · Lafayette · West Lafayette · Purdue</div>
+    <h1 id="title">Dispatch Monitor</h1>
+    <div class="sub" id="channelsLine">Fire &amp; EMS dispatch</div>
   </div>
   <span class="pill" id="statusPill"><span class="dot"></span><span id="statusText">Connecting…</span></span>
   <span class="sub" id="pipelineText"></span>
@@ -229,11 +245,11 @@ tr.click { cursor: pointer; } tr.click:hover td { background: var(--surface-2); 
 
 <div class="filters">
   <div class="seg" id="rangeSeg">
-    <button data-days="1">24h</button><button data-days="7">7d</button><button data-days="30" class="on">30d</button>
+    <button data-days="1" class="on">24h</button><button data-days="7">7d</button><button data-days="30">30d</button>
     <button data-days="90">90d</button><button data-days="365">1y</button><button data-days="0">All</button>
   </div>
   <div id="catChips" style="display:flex;gap:6px;flex-wrap:wrap"></div>
-  <select id="agencySel"><option value="">All agencies</option></select>
+  <select id="agencySel" aria-label="Department"><option value="">All departments</option></select>
   <input type="search" id="q" placeholder="Search address, unit, type…">
   <label class="toggle"><input type="checkbox" id="bboxToggle"> Only map area</label>
   <div class="active-filters" id="activeFilters"></div>
@@ -248,7 +264,7 @@ tr.click { cursor: pointer; } tr.click:hover td { background: var(--surface-2); 
     <div class="mapwrap">
       <div id="map"></div>
       <div class="map-ctl">
-        <div class="seg" id="modeSeg"><button data-mode="heat" class="on">Heatmap</button><button data-mode="dots">Incidents</button></div>
+        <div class="seg" id="modeSeg"><button data-mode="dots" class="on">Incidents</button><button data-mode="heat">Heatmap</button></div>
         <div class="legend" id="mapLegend"></div>
       </div>
     </div>
@@ -296,8 +312,8 @@ tr.click { cursor: pointer; } tr.click:hover td { background: var(--surface-2); 
         <h2>By ZIP code</h2>
         <div class="hint">Mapped incidents only</div>
         <div class="bars" id="byZip"></div>
-        <h2 style="margin-top:18px">By agency</h2>
-        <div class="hint">An incident dispatched to two agencies counts for both</div>
+        <h2 style="margin-top:18px">By department</h2>
+        <div class="hint">An incident dispatched to two departments counts for both. Click to filter.</div>
         <div class="bars" id="byAgency"></div>
       </div>
     </div>
@@ -313,13 +329,24 @@ tr.click { cursor: pointer; } tr.click:hover td { background: var(--surface-2); 
 // ─────────────────────────────────────────────
 const CATS = ["Medical", "Fire", "Alarm", "Traffic", "Hazmat", "Rescue", "Service", "Other"];
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const F = { days: 30, cats: new Set(), agency: "", q: "", hours: new Set(), dows: new Set(), natures: new Set(), bbox: false };
-let mode = "heat", view = "mapView", incidents = [], lastIds = "";
+const F = { days: 1, cats: new Set(), agency: "", q: "", hours: new Set(), dows: new Set(), natures: new Set(), bbox: false };
+let mode = "dots", view = "mapView", incidents = [], lastIds = "";
+let DEPT_KIND = {};                       // department name -> fire | ems | rescue | other (from api/meta)
+const FRESH_MS = 15 * 60 * 1000;          // "new" badge / pulsing marker
+
+// Remember range, map mode and department between visits (per browser; optional).
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("dm." + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("dm." + k, JSON.stringify(v)); } catch {} },
+};
+F.days = store.get("days", F.days); F.agency = store.get("agency", ""); mode = store.get("mode", mode);
 
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const catColor = c => css("--c-" + (c || "other").toLowerCase()) || css("--c-other");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmtN = n => n >= 10000 ? (n / 1000).toFixed(1).replace(/\.0$/, "") + "K" : n.toLocaleString();
+const deptBadges = list => (list || []).length
+  ? `<div class="depts">${list.map(d => `<span class="dept ${DEPT_KIND[d] || "other"}">${esc(d)}</span>`).join("")}</div>` : "";
 
 function qs(extra = {}) {
   const p = new URLSearchParams();
@@ -351,11 +378,11 @@ document.getElementById("catChips").addEventListener("click", e => {
 });
 document.getElementById("rangeSeg").addEventListener("click", e => {
   const b = e.target.closest("[data-days]"); if (!b) return;
-  F.days = +b.dataset.days;
+  F.days = +b.dataset.days; store.set("days", F.days);
   document.querySelectorAll("#rangeSeg button").forEach(x => x.classList.toggle("on", x === b));
   refresh();
 });
-document.getElementById("agencySel").addEventListener("change", e => { F.agency = e.target.value; refresh(); });
+document.getElementById("agencySel").addEventListener("change", e => { F.agency = e.target.value; store.set("agency", F.agency); refresh(); });
 let qTimer;
 document.getElementById("q").addEventListener("input", e => { clearTimeout(qTimer); qTimer = setTimeout(() => { F.q = e.target.value.trim(); refresh(); }, 300); });
 document.getElementById("bboxToggle").addEventListener("change", e => { F.bbox = e.target.checked; refresh(); });
@@ -389,6 +416,9 @@ document.querySelector(".tabs").addEventListener("click", e => {
 // Map
 // ─────────────────────────────────────────────
 const map = L.map("map", { center: [40.4167, -86.8753], zoom: 12, preferCanvas: true });
+// Leaflet measures its container once; re-measure whenever layout changes it
+// (first paint, window resize, mobile rotation) so tiles fill the whole map.
+new ResizeObserver(() => map.invalidateSize()).observe(document.getElementById("map"));
 // CARTO basemaps when CARTO_API_KEY is configured (dark/light follow the theme);
 // otherwise standard OSM tiles, inverted in CSS for dark mode (.osm .leaflet-tile-pane).
 const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
@@ -411,7 +441,7 @@ const HEAT = { .2: "#3987e5", .5: "#1baf7a", .7: "#eda100", .85: "#eb6834", 1: "
 let heat = null; const dots = L.layerGroup().addTo(map);
 document.getElementById("modeSeg").addEventListener("click", e => {
   const b = e.target.closest("[data-mode]"); if (!b) return;
-  mode = b.dataset.mode;
+  mode = b.dataset.mode; store.set("mode", mode);
   document.querySelectorAll("#modeSeg button").forEach(x => x.classList.toggle("on", x === b));
   renderMap();
 });
@@ -431,13 +461,17 @@ function renderMap() {
       <div>${fmtN(pts.length)} mapped incidents</div>`;
   } else {
     // newest last so they draw on top
+    const now = Date.now();
     for (const i of [...pts].reverse()) {
       const approx = i.precision === "street";
+      const fresh = now - i.first_ms < FRESH_MS;
+      if (fresh) dots.addLayer(L.marker([i.lat, i.lon], { interactive: false, keyboard: false,
+        icon: L.divIcon({ className: "", html: `<div class="pulse" style="width:12px;height:12px"></div>`, iconSize: [12, 12] }) }));
       const m = L.circleMarker([i.lat, i.lon], {
-        radius: 6, weight: 2, color: approx ? catColor(i.category) : css("--surface"),
+        radius: fresh ? 8 : 6, weight: 2, color: approx ? catColor(i.category) : css("--surface"),
         fillColor: catColor(i.category), fillOpacity: approx ? .25 : .95,
       });
-      m.on("mouseover", ev => showTip(ev.originalEvent, `<b>${esc(i.nature)}</b><div class="m">${esc(i.matched || i.address || i.place)}</div><div class="m">${fmtTime(i.first_ms)}</div>`));
+      m.on("mouseover", ev => showTip(ev.originalEvent, `<b>${esc(i.nature)}</b><div class="m">${esc(i.matched || i.address || i.place)}</div><div class="m">${fmtTime(i.first_ms)}</div><div class="m">${esc(i.agencies.join(", "))}</div>`));
       m.on("mouseout", hideTip);
       m.on("click", () => openIncident(i.id));
       dots.addLayer(m);
@@ -467,16 +501,25 @@ function renderFeed() {
   document.getElementById("feedCount").textContent = fmtN(incidents.length);
   const el = document.getElementById("feed");
   if (!incidents.length) { el.innerHTML = `<div class="empty">No incidents match these filters yet.<br>New dispatches appear here within a minute.</div>`; return; }
+  const now = Date.now(), today = new Date().toDateString();
+  let lastDay = null;
   el.innerHTML = incidents.slice(0, 300).map(i => {
     const approx = i.lat == null || i.precision === "street";
     const col = catColor(i.category);
-    return `<div class="item" data-id="${i.id}">
+    const fresh = now - i.first_ms < FRESH_MS;
+    const day = new Date(i.first_ms).toDateString();
+    const sep = F.days !== 1 && day !== lastDay
+      ? `<div class="day-sep">${day === today ? "Today" : new Date(i.first_ms).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}</div>` : "";
+    lastDay = day;
+    const patient = [i.patient_age ? `${i.patient_age}${i.patient_sex ? (i.patient_sex === "male" ? "M" : "F") : " y/o"}` : ""].filter(Boolean);
+    return `${sep}<div class="item ${fresh ? "fresh" : ""}" data-id="${i.id}">
       <span class="sw ${approx ? "approx" : ""}" style="background:${col};border-color:${col}" title="${i.lat == null ? "Not mapped" : approx ? "Approximate location" : "Mapped"}"></span>
       <div class="body">
-        <div class="t1">${esc(i.nature)}</div>
+        <div class="t1">${esc(i.nature)}${fresh ? `<span class="new-badge">NEW</span>` : ""}</div>
         <div class="t2">${esc(i.matched || i.address || i.place || "Unknown location")}${i.place && i.matched ? " · " + esc(i.place) : ""}</div>
         ${i.summary ? `<div class="t3">${esc(i.summary)}</div>` : ""}
-        <div class="t3">${relTime(i.first_ms)} · ${esc(i.agencies.join(", "))}</div>
+        <div class="t3"><span class="num">${relTime(i.first_ms)}</span>${patient.length ? " · " + patient.join(" ") : ""}${i.units.length ? " · " + esc(i.units.slice(0, 4).join(", ")) : ""}</div>
+        ${deptBadges(i.agencies)}
       </div></div>`;
   }).join("");
 }
@@ -503,13 +546,14 @@ async function openIncident(id, fly) {
       ${i.address && i.matched && i.address !== i.matched ? `<dt>As heard</dt><dd>${esc(i.address)}</dd>` : ""}
       ${i.summary ? `<dt>Summary</dt><dd>${esc(i.summary)}</dd>` : ""}
       ${patient ? `<dt>Patient</dt><dd>${esc(patient)}</dd>` : ""}
-      <dt>Agencies</dt><dd>${esc(i.agencies.join(", "))}</dd>
+      <dt>Departments</dt><dd>${deptBadges(i.agencies)}</dd>
       ${i.units.length ? `<dt>Units</dt><dd>${esc(i.units.join(", "))}</dd>` : ""}
       ${i.zip ? `<dt>ZIP</dt><dd>${esc(i.zip)}</dd>` : ""}
     </dl>
     ${(i.transmissions || []).map(t => `<div class="tx">
       <div class="h">${esc(t.agency)} · ${new Date(t.time_ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} · ${t.len_s}s</div>
       <p>${esc(t.transcript || "")}</p>
+      ${t.transcript_raw && t.transcript_raw !== t.transcript ? `<details class="raw"><summary>As first heard (before name fixes)</summary>${esc(t.transcript_raw)}</details>` : ""}
       <audio controls preload="none" src="api/audio/${encodeURIComponent(t.id)}"></audio></div>`).join("")}
     ${i.history && i.history.length ? `<div class="tx"><div class="h">Previous incidents at this address</div>
       ${i.history.map(h => `<div style="font-size:13px;display:flex;gap:8px;align-items:center;padding:2px 0;cursor:pointer" data-hist="${h.id}">
@@ -672,7 +716,8 @@ function renderStats(st) {
   hBars(document.getElementById("byNature"), st.by_nature,
     { color: r => catColor(r.category), swatch: true, selected: r => F.natures.has(r.key) });
   hBars(document.getElementById("byZip"), st.by_zip, {});
-  hBars(document.getElementById("byAgency"), st.by_agency, { selected: r => F.agency === r.key });
+  hBars(document.getElementById("byAgency"), st.by_agency, { selected: r => F.agency === r.key, swatch: true,
+    color: r => DEPT_KIND[r.key] === "ems" ? catColor("Medical") : DEPT_KIND[r.key] === "fire" ? catColor("Fire") : css("--c-other") });
   renderHourDow(document.getElementById("hourDow"), st.by_hour_dow);
 
   // hour x category stacked
@@ -698,7 +743,8 @@ document.getElementById("byCat").addEventListener("click", e => { const b = e.ta
 document.getElementById("byNature").addEventListener("click", e => { const b = e.target.closest("[data-key]"); if (b) { toggleSet(F.natures, b.dataset.key); refresh(); } });
 document.getElementById("byAgency").addEventListener("click", e => {
   const b = e.target.closest("[data-key]"); if (!b) return;
-  F.agency = F.agency === b.dataset.key ? "" : b.dataset.key; document.getElementById("agencySel").value = F.agency; refresh();
+  F.agency = F.agency === b.dataset.key ? "" : b.dataset.key; store.set("agency", F.agency);
+  document.getElementById("agencySel").value = F.agency; refresh();
 });
 document.getElementById("topLoc").addEventListener("click", e => {
   const r = e.target.closest("[data-lat]"); if (!r) return;
@@ -755,8 +801,23 @@ document.getElementById("bfBtn").addEventListener("click", async () => {
   try {
     const m = await fetch("api/meta").then(r => r.json());
     cartoKey = m.carto_key;
-    document.getElementById("agencySel").innerHTML = `<option value="">All agencies</option>` + m.agencies.map(a => `<option>${esc(a)}</option>`).join("");
+    const c = m.county || {};
+    if (c.title) { document.getElementById("title").textContent = c.title; document.title = c.title; }
+    if (c.subtitle) document.getElementById("channelsLine").textContent = c.subtitle;
+    if (c.center) map.setView(c.center, c.zoom || 12);
+    const depts = m.departments || m.agencies.map(a => ({ name: a, kind: "other" }));
+    DEPT_KIND = Object.fromEntries(depts.map(d => [d.name, d.kind]));
+    const group = (label, list) => list.length ? `<optgroup label="${label}">${list.map(d =>
+      `<option value="${esc(d.name)}">${esc(d.name)}${d.area ? ` (${esc(d.area)})` : ""}</option>`).join("")}</optgroup>` : "";
+    document.getElementById("agencySel").innerHTML = `<option value="">All departments</option>`
+      + group("EMS", depts.filter(d => d.kind === "ems"))
+      + group("Fire", depts.filter(d => d.kind === "fire" || d.kind === "rescue"))
+      + group("Other", depts.filter(d => !["ems", "fire", "rescue"].includes(d.kind)));
+    if (F.agency && !DEPT_KIND[F.agency]) { F.agency = ""; store.set("agency", ""); }
+    document.getElementById("agencySel").value = F.agency;
   } catch {}
+  document.querySelectorAll("#rangeSeg button").forEach(x => x.classList.toggle("on", +x.dataset.days === F.days));
+  document.querySelectorAll("#modeSeg button").forEach(x => x.classList.toggle("on", x.dataset.mode === mode));
   setBasemap();
   buildCatChips();
   if (location.hash === "#stats") { document.querySelector('[data-view="statsView"]').click(); }
