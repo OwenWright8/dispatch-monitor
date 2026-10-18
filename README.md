@@ -158,6 +158,11 @@ restart. **Reset** goes back to the `.env` / built-in value.
 If the dashboard is reachable from the internet (e.g. through a reverse proxy), set `ADMIN_PASSWORD` in
 `.env`. Saving settings then requires it, while viewing stays open.
 
+**Data retention** (also in Settings): dispatch audio clips are kept for 24 hours; call details (transcripts,
+summaries, patient age/sex, units) for 7 days; and the incident itself (call type, location, departments,
+time) for 365 days, which is what the statistics use. `python -m dispatch reprocess` rebuilds only the
+incidents that still have transcripts.
+
 ## Versions
 
 Releases are tagged `vMAJOR.MINOR.PATCH` and listed on the GitHub *Releases* page with what changed. Each
@@ -179,6 +184,9 @@ in the dashboard:
 | `WHISPER_MODEL` ⚙ | `small.en` | `base.en` / `small.en` / `medium.en` |
 | `BACKFILL_HOURS` | `24` | history to load in the background on first start; `0` = live only. More can be loaded from the dashboard. |
 | `CHANNELS` | the county profile's | `talkgroup:label:city-hint,…`; a label naming a department credits it |
+| `AUDIO_RETENTION_HOURS` ⚙ | `24` | delete audio clips after this |
+| `DETAIL_RETENTION_DAYS` ⚙ | `7` | delete transcripts, summaries, patient info and units after this |
+| `INCIDENT_RETENTION_DAYS` ⚙ | `365` | delete incidents (type, location, departments) after this |
 | `KEEP_AUDIO` ⚙ | `true` | keep dispatch clips (about 100 KB each) in `/data/audio` |
 | `INCIDENT_WINDOW_MIN` ⚙ | `20` | transmissions merge into one incident within this window |
 | `WEB_PORT` | `8086` | host port |

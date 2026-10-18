@@ -53,6 +53,15 @@ SPECS: tuple[Spec, ...] = (
          min=1, max=180),
     Spec("KEEP_AUDIO", "Keep dispatch audio", "Incidents", "bool", config.KEEP_AUDIO,
          "Saves each dispatch clip (~100 KB) so it can be replayed after OpenMHz drops it."),
+    Spec("AUDIO_RETENTION_HOURS", "Keep audio clips for (hours)", "Data retention", "int",
+         config.AUDIO_RETENTION_HOURS, "Older clips are deleted.", min=1, max=24 * 365),
+    Spec("DETAIL_RETENTION_DAYS", "Keep call details for (days)", "Data retention", "int",
+         config.DETAIL_RETENTION_DAYS,
+         "Transcripts, summaries, patient age/sex and units. After this only the call type, location, "
+         "departments and time remain.", min=1, max=3650),
+    Spec("INCIDENT_RETENTION_DAYS", "Keep incidents for (days)", "Data retention", "int",
+         config.INCIDENT_RETENTION_DAYS, "Call type, location and departments, used for the statistics.",
+         min=7, max=3650),
     Spec("CARTO_API_KEY", "CARTO map key", "Map", "str", config.CARTO_API_KEY,
          "Optional key for the CARTO dark/light map style. Empty = OpenStreetMap tiles. Visible to viewers."),
 )
