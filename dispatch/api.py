@@ -127,6 +127,7 @@ def status():
         "oldest_ms": q("SELECT MIN(first_ms) FROM incidents"),
         "newest_ms": q("SELECT MAX(first_ms) FROM incidents"),
         "last_poll": s["last_poll"], "last_poll_error": s["last_poll_error"],
+        "poll_failures": s["poll_failures"], "next_poll": s["next_poll"], "feed_identity": openmhz.identity(),
         "last_processed": s["last_processed"],
         "llm": {"enabled": settings.get("LLM_ENABLED"), "model": settings.get("OLLAMA_MODEL"), "ok": s["llm_ok"], "error": s["llm_error"]},
         "whisper_model": settings.get("WHISPER_MODEL"),
