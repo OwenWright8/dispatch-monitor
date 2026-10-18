@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from . import config, db, departments, extract, openmhz, transcribe
+from . import config, db, departments, extract, openmhz, settings, transcribe
 from .geo import Geocoder, GeoResult
 from .taxonomy import category_for
 
@@ -52,7 +52,7 @@ def _insert(calls: list[dict], min_ms: int = 0) -> int:
     n = 0
     for call in calls:
         tg = call.get("talkgroupNum")
-        ch = config.CHANNELS.get(tg)
+        ch = settings.enabled_channels().get(tg)
         t_ms = openmhz.to_ms(call["time"])
         if ch is None or t_ms < min_ms:
             continue
@@ -60,7 +60,7 @@ def _insert(calls: list[dict], min_ms: int = 0) -> int:
             "INSERT OR IGNORE INTO transmissions(id, talkgroup, agency, time_ms, len_s, url, status) "
             "VALUES (?,?,?,?,?,?,?)",
             (call["_id"], tg, ch.agency, t_ms, call.get("len"), call.get("url"),
-             "pending" if (call.get("len") or 0) >= config.MIN_CALL_SECONDS else "short"))
+             "pending" if (call.get("len") or 0) >= settings.get("MIN_CALL_SECONDS") else "short"))
         n += cur.rowcount
     return n
 
@@ -130,6 +130,8 @@ def backfill(hours: float, _locked: bool = False) -> int:
 
 def start_backfill(hours: float) -> bool:
     """Start a backfill in the background; False if one is already running."""
+    # Calls older than the detail retention would only be deleted again.
+    hours = min(hours, settings.get("DETAIL_RETENTION_DAYS") * 24)
     if not _backfill_lock.acquire(blocking=False):
         return False
     status["backfill"]["running"] = True
@@ -145,7 +147,7 @@ def poller_loop(stop: threading.Event):
         status["last_poll_error"] = str(e)
     if config.BACKFILL_HOURS > 0:
         start_backfill(config.BACKFILL_HOURS)     # in its own thread; polling continues
-    while not stop.wait(config.POLL_INTERVAL_S):
+    while not stop.wait(settings.get("POLL_INTERVAL_S")):
         try:
             poll_once()
         except Exception as e:
@@ -203,7 +205,7 @@ def attach(time_ms: int, depts: list[str], fields: dict, geo: GeoResult | None, 
     if not fields.get("is_dispatch") or not (fields.get("address") or fields.get("place")):
         return None
     c = db.conn()
-    window = config.INCIDENT_WINDOW_MIN * 60_000
+    window = settings.get("INCIDENT_WINDOW_MIN") * 60_000
     nature = fields.get("nature") or "Other"
     rows = c.execute("SELECT * FROM incidents WHERE first_ms BETWEEN ? AND ? ORDER BY ABS(first_ms - ?)",
                      (time_ms - window, time_ms + window, time_ms)).fetchall()
@@ -263,10 +265,17 @@ def _prepare_llm(wait_s: int = 0):
         status["llm_ok"], status["llm_error"] = None, None   # becomes True on the first successful call
 
 
+def llm_settings_changed():
+    """Ollama address/model changed in the dashboard: re-check it on the next call."""
+    global _llm_last_prepare
+    status["llm_ok"], status["llm_error"] = False, "Settings changed; connecting…"
+    _llm_last_prepare = 0.0
+
+
 def _extract(transcript: str) -> tuple[dict, str]:
     global _llm_warned
     # Ollama was down or the model missing: try again every 10 minutes.
-    if status["llm_ok"] is False and time.time() - _llm_last_prepare > 600:
+    if status["llm_ok"] is False and settings.get("LLM_ENABLED") and time.time() - _llm_last_prepare > 600:
         _prepare_llm()
     try:
         fields, method = extract.extract(transcript, use_llm=True)
@@ -311,7 +320,7 @@ def process(tx):
         transcript = departments.normalize(raw)
         fields, method, inc = handle_transcript(tx, transcript)
         audio_path = None
-        if inc and config.KEEP_AUDIO:
+        if inc and settings.get("KEEP_AUDIO"):
             audio_path = _archive_path(tx)
             shutil.move(tmp, audio_path)
         c.execute("UPDATE transmissions SET status='done', transcript=?, transcript_raw=?, method=?, extracted=?, "
@@ -332,7 +341,7 @@ def process(tx):
 def worker_loop(stop: threading.Event):
     c = db.conn()
     geocoder()    # build/load street index up front
-    if config.LLM_ENABLED:
+    if settings.get("LLM_ENABLED"):
         _prepare_llm(wait_s=300)
     while not stop.is_set():
         tx = c.execute("SELECT * FROM transmissions WHERE status='pending' AND attempts < 4 "
@@ -350,10 +359,75 @@ def worker_loop(stop: threading.Event):
             stop.wait(5)
 
 
-def reprocess(use_llm: bool = True):
-    """Rebuild every incident from stored transcripts (after prompt/taxonomy/geocoder changes)."""
+# ─────────────────────────────────────────────
+# Retention
+# ─────────────────────────────────────────────
+def housekeeping() -> dict:
+    """Apply the retention settings: delete audio clips, then call details
+    (transcripts, summaries, patient info, units), then whole incidents."""
     c = db.conn()
-    c.execute("DELETE FROM incidents")
+    now = time.time() * 1000
+    audio_cut = now - settings.get("AUDIO_RETENTION_HOURS") * 3_600_000
+    detail_cut = now - settings.get("DETAIL_RETENTION_DAYS") * 86_400_000
+    incident_cut = now - settings.get("INCIDENT_RETENTION_DAYS") * 86_400_000
+    done = {"audio": 0, "transmissions": 0, "details": 0, "incidents": 0}
+
+    for tx_id, path in c.execute("SELECT id, audio_path FROM transmissions WHERE audio_path IS NOT NULL "
+                                 "AND (time_ms < ? OR time_ms < ?)", (audio_cut, detail_cut)).fetchall():
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        c.execute("UPDATE transmissions SET audio_path=NULL WHERE id=?", (tx_id,))
+        done["audio"] += 1
+    # Clips no row points at any more (e.g. from before this ran), by file age
+    if config.AUDIO_DIR.exists():
+        for f in config.AUDIO_DIR.rglob("*.m4a"):
+            try:
+                if f.stat().st_mtime * 1000 < audio_cut:
+                    f.unlink()
+                    done["audio"] += 1
+            except OSError:
+                pass
+        for d in sorted((p for p in config.AUDIO_DIR.rglob("*") if p.is_dir()), key=lambda p: -len(p.parts)):
+            try:
+                d.rmdir()                       # only succeeds when empty
+            except OSError:
+                pass
+
+    done["transmissions"] = c.execute("DELETE FROM transmissions WHERE time_ms < ?", (detail_cut,)).rowcount
+    done["details"] = c.execute(
+        "UPDATE incidents SET summary=NULL, patient_age=NULL, patient_sex=NULL, units='[]' WHERE last_ms < ? "
+        "AND (summary IS NOT NULL OR patient_age IS NOT NULL OR patient_sex IS NOT NULL OR units <> '[]')",
+        (detail_cut,)).rowcount
+    done["incidents"] = c.execute("DELETE FROM incidents WHERE first_ms < ?", (incident_cut,)).rowcount
+    if any(done.values()):
+        log.info("Retention: removed {audio} audio clips, {transmissions} transmissions, details of {details} "
+                 "incidents, {incidents} incidents".format(**done))
+    return done
+
+
+def housekeeping_loop(stop: threading.Event):
+    while not stop.is_set():
+        try:
+            housekeeping()
+        except Exception as e:
+            log.warning(f"Retention cleanup failed: {e}")
+        stop.wait(900)
+
+
+def reprocess(use_llm: bool = True):
+    """Rebuild incidents from stored transcripts (after prompt/taxonomy/geocoder changes).
+
+    Transcripts are only kept for DETAIL_RETENTION_DAYS, so only incidents from
+    that period are rebuilt; older incidents (type, location, departments) stay."""
+    c = db.conn()
+    oldest = c.execute("SELECT MIN(time_ms) FROM transmissions WHERE status='done' AND transcript IS NOT NULL"
+                       ).fetchone()[0]
+    if oldest is None:
+        log.info("No stored transcripts to reprocess")
+        return
+    c.execute("DELETE FROM incidents WHERE last_ms >= ?", (oldest,))
     c.execute("DELETE FROM geocache")      # geocoder may have improved since these were cached
     c.execute("UPDATE transmissions SET incident_id=NULL")
     rows = c.execute("SELECT * FROM transmissions WHERE status='done' AND transcript IS NOT NULL "
