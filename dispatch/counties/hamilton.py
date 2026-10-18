@@ -103,6 +103,7 @@ PROFILE = Profile(
     unit_examples='"Medic 341", "Engine 391", "Ladder 381", "Engine 321", "Medic 355", "Battalion 370"',
     # Mishearings found transcribing two days of county dispatch audio.
     transcript_fixes=(
+        (r"\b(?:titan|italian|batallion|battalian|battle ?ion|medallion)\s+(?=30\d\b)", "Battalion "),
         (r"\b(?:meso|medal|metal|mental)[\s/-]*emotional\b", "mental/emotional"),
         (r"\btang(?:er|o)\s+(?=3?\d{2}\b)", "Tanker "),
         (r"\b(?:ringel|ringle|residual|rezidential|residental)\s+alarm\b", "residential alarm"),

@@ -137,10 +137,17 @@ def detect(transcript: str, units: list[str] | None = None, channel=None) -> lis
             m = _BARE_NUM.match(u)
             if m:
                 nums.append(m.group(1))
-        for n in nums:
-            d = _by_unit_number(n)
-            if d:
-                add(d.name)
+        # Full unit numbers ("Engine 383") are strong evidence; two-digit ones are weak:
+        # crews do shorten ("Ladder 72" = 372) but Whisper also drops digits
+        # ("Engine 33" for Engine 383). A weak one only counts on its own or
+        # when it agrees with the full numbers on the same call.
+        strong = [d.name for n in nums if len(n) >= 3 for d in [_by_unit_number(n)] if d]
+        weak = [d.name for n in nums if len(n) < 3 for d in [_by_unit_number(n)] if d]
+        for name in strong:
+            add(name)
+        for name in weak:
+            if not strong or name in strong:
+                add(name)
     if channel is not None and channel.default_department:
         add(channel.default_department)     # the Lafayette FD channel always dispatches Lafayette FD
     return found

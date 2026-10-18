@@ -80,6 +80,8 @@ BACKFILL_HOURS = float(_env("BACKFILL_HOURS", "24"))   # history to pull on firs
 MIN_CALL_SECONDS = int(_env("MIN_CALL_SECONDS", "4"))  # shorter clips are acks/keyups
 
 WHISPER_MODEL = _env("WHISPER_MODEL", "small.en")
+# Optional speech-to-text server (whisper-asr-webservice, e.g. on a GPU); empty = built-in model
+WHISPER_URL = _env("WHISPER_URL", "").strip()
 WHISPER_COMPUTE = _env("WHISPER_COMPUTE", "int8")
 WHISPER_THREADS = int(_env("WHISPER_THREADS", "0"))    # 0 = let CTranslate2 decide
 WHISPER_BEAM = int(_env("WHISPER_BEAM", "5"))

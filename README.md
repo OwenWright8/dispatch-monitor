@@ -181,6 +181,7 @@ in the dashboard:
 | `OLLAMA_URL` ⚙ | `http://ollama:11434` | point at an Ollama installed on the host (e.g. `http://host.docker.internal:11434`) to use its GPU |
 | `OLLAMA_MODEL` ⚙ | `qwen2.5:7b` | pulled automatically if missing |
 | `LLM_ENABLED` ⚙ | `true` | `false` = keyword rules only, no Ollama |
+| `WHISPER_URL` ⚙ | empty | a [whisper-asr-webservice](https://github.com/ahmetoner/whisper-asr-webservice) on a GPU (e.g. `large-v3`); the built-in model takes over if it's down |
 | `WHISPER_MODEL` ⚙ | `small.en` | `base.en` / `small.en` / `medium.en` |
 | `BACKFILL_HOURS` | `24` | history to load in the background on first start; `0` = live only. More can be loaded from the dashboard. |
 | `CHANNELS` | the county profile's | `talkgroup:label:city-hint,…`; a label naming a department credits it |

@@ -198,6 +198,8 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .version { color: var(--muted); font-size: 11px; }
 @media (max-width: 900px) { .set-row { grid-template-columns: 1fr; } }
 .tx .raw { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.prec.conf-confirmed { color: var(--c-rescue); }
+.prec.conf-doubtful { color: var(--stale); }
 .tx .raw summary { cursor: pointer; }
 
 /* department badges */
@@ -481,7 +483,7 @@ function renderMap() {
     // newest last so they draw on top
     const now = Date.now();
     for (const i of [...pts].reverse()) {
-      const approx = i.precision === "street";
+      const approx = i.precision === "street" || i.confidence === "approximate" || i.confidence === "doubtful";
       const fresh = now - i.first_ms < FRESH_MS;
       if (fresh) dots.addLayer(L.marker([i.lat, i.lon], { interactive: false, keyboard: false,
         icon: L.divIcon({ className: "", html: `<div class="pulse" style="width:12px;height:12px"></div>`, iconSize: [12, 12] }) }));
@@ -489,7 +491,7 @@ function renderMap() {
         radius: fresh ? 8 : 6, weight: 2, color: approx ? catColor(i.category) : css("--surface"),
         fillColor: catColor(i.category), fillOpacity: approx ? .25 : .95,
       });
-      m.on("mouseover", ev => showTip(ev.originalEvent, `<b>${esc(i.nature)}</b><div class="m">${esc(i.matched || i.address || i.place)}</div><div class="m">${fmtTime(i.first_ms)}</div><div class="m">${esc(i.agencies.join(", "))}</div>`));
+      m.on("mouseover", ev => showTip(ev.originalEvent, `<b>${esc(i.nature)}</b><div class="m">${esc(i.matched || i.address || i.place)}</div><div class="m">${fmtTime(i.first_ms)}</div><div class="m">${esc(i.agencies.join(", "))}</div>${i.confidence ? `<div class="m">Location: ${CONF[i.confidence] || i.confidence}</div>` : ""}`));
       m.on("mouseout", hideTip);
       m.on("click", () => openIncident(i.id));
       dots.addLayer(m);
@@ -549,6 +551,8 @@ document.getElementById("feed").addEventListener("click", e => {
 // Incident detail
 // ─────────────────────────────────────────────
 const PREC = { address: "exact address", intersection: "intersection", place: "named place", street: "street only (approximate)" };
+const CONF = { confirmed: "confirmed by cross streets", high: "matches the departments' area",
+  approximate: "approximate, still checking", doubtful: "doesn't match the call, still checking" };
 async function openIncident(id, fly) {
   const r = await fetch(`api/incidents/${id}`); if (!r.ok) return;
   const i = await r.json();
@@ -559,7 +563,7 @@ async function openIncident(id, fly) {
     <h3><span class="sw" style="background:${catColor(i.category)}"></span>${esc(i.nature)}</h3>
     <div class="meta">${esc(i.category)} · ${new Date(i.first_ms).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div>
     <dl class="kv">
-      <dt>Location</dt><dd>${esc(i.matched || i.address || i.place || "Unknown")}${i.precision ? `<span class="prec">${PREC[i.precision] || i.precision}</span>` : `<span class="prec">not mapped</span>`}</dd>
+      <dt>Location</dt><dd>${esc(i.matched || i.address || i.place || "Unknown")}${i.precision ? `<span class="prec">${PREC[i.precision] || i.precision}</span>` : `<span class="prec">not mapped, still checking</span>`}${i.confidence ? `<span class="prec conf-${i.confidence}">${CONF[i.confidence] || i.confidence}</span>` : ""}</dd>
       ${i.place ? `<dt>Place</dt><dd>${esc(i.place)}</dd>` : ""}
       ${i.address && i.matched && i.address !== i.matched ? `<dt>As heard</dt><dd>${esc(i.address)}</dd>` : ""}
       ${i.summary ? `<dt>Summary</dt><dd>${esc(i.summary)}</dd>` : ""}
