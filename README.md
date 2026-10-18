@@ -142,23 +142,56 @@ GitHub Actions publishes both images (amd64 + arm64) on pushes to `main`:
 `ghcr.io/owenwright8/dispatch-monitor-ollama` when `Dockerfile.ollama` changes. To pick up a newer
 Ollama release, run that workflow manually. Pull requests build both images without publishing them.
 
+## Settings
+
+Most settings can be changed from the dashboard: **Settings** in the header. That covers:
+- the AI model (on/off, Ollama address, model, timeout)
+- the speech-to-text model and beam size
+- which channels are monitored, how often to poll, and the minimum clip length
+- the incident merge window
+- whether audio is kept
+- the CARTO map key
+
+Values saved there are stored in the database, override `.env`, and apply within a few seconds without a
+restart. **Reset** goes back to the `.env` / built-in value.
+
+If the dashboard is reachable from the internet (e.g. through a reverse proxy), set `ADMIN_PASSWORD` in
+`.env`. Saving settings then requires it, while viewing stays open.
+
+**Data retention** (also in Settings): dispatch audio clips are kept for 24 hours; call details (transcripts,
+summaries, patient age/sex, units) for 7 days; and the incident itself (call type, location, departments,
+time) for 365 days, which is what the statistics use. `python -m dispatch reprocess` rebuilds only the
+incidents that still have transcripts.
+
+## Versions
+
+Releases are tagged `vMAJOR.MINOR.PATCH` and listed on the GitHub *Releases* page with what changed. Each
+release publishes the image as `:2.1.0`, `:2.1` and `:2` as well as `:latest`. To stay on a version
+instead of following `:latest`, put the tag in `docker-compose.yml`, e.g.
+`ghcr.io/owenwright8/dispatch-monitor:2.1`. The running version is shown in the Settings panel.
+
 ## Configuration
 
-All settings are optional and go in `.env` (see `.env.example`):
+All settings are optional and go in `.env` (see `.env.example`). The ones marked ⚙ can also be changed
+in the dashboard:
 
 | Variable | Default | |
 |---|---|---|
 | `COUNTY` | `tippecanoe` | county profile in `dispatch/counties/` (`tippecanoe`, `hamilton`) |
-| `OLLAMA_URL` | `http://ollama:11434` | point at an Ollama installed on the host (e.g. `http://host.docker.internal:11434`) to use its GPU |
-| `OLLAMA_MODEL` | `qwen2.5:7b` | pulled automatically if missing |
-| `LLM_ENABLED` | `true` | `false` = keyword rules only, no Ollama |
-| `WHISPER_MODEL` | `small.en` | `base.en` / `small.en` / `medium.en` |
+| `OLLAMA_URL` ⚙ | `http://ollama:11434` | point at an Ollama installed on the host (e.g. `http://host.docker.internal:11434`) to use its GPU |
+| `OLLAMA_MODEL` ⚙ | `qwen2.5:7b` | pulled automatically if missing |
+| `LLM_ENABLED` ⚙ | `true` | `false` = keyword rules only, no Ollama |
+| `WHISPER_MODEL` ⚙ | `small.en` | `base.en` / `small.en` / `medium.en` |
 | `BACKFILL_HOURS` | `24` | history to load in the background on first start; `0` = live only. More can be loaded from the dashboard. |
 | `CHANNELS` | the county profile's | `talkgroup:label:city-hint,…`; a label naming a department credits it |
-| `KEEP_AUDIO` | `true` | keep dispatch clips (about 100 KB each) in `/data/audio` |
-| `INCIDENT_WINDOW_MIN` | `20` | transmissions merge into one incident within this window |
+| `AUDIO_RETENTION_HOURS` ⚙ | `24` | delete audio clips after this |
+| `DETAIL_RETENTION_DAYS` ⚙ | `7` | delete transcripts, summaries, patient info and units after this |
+| `INCIDENT_RETENTION_DAYS` ⚙ | `365` | delete incidents (type, location, departments) after this |
+| `KEEP_AUDIO` ⚙ | `true` | keep dispatch clips (about 100 KB each) in `/data/audio` |
+| `INCIDENT_WINDOW_MIN` ⚙ | `20` | transmissions merge into one incident within this window |
 | `WEB_PORT` | `8086` | host port |
-| `CARTO_API_KEY` | empty | [CARTO basemaps](https://carto.com/basemaps) key for the dark/light map style; empty = OpenStreetMap tiles |
+| `ADMIN_PASSWORD` | empty | required to save settings in the dashboard when set |
+| `CARTO_API_KEY` ⚙ | empty | [CARTO basemaps](https://carto.com/basemaps) key for the dark/light map style; empty = OpenStreetMap tiles |
 
 ## Maintenance
 

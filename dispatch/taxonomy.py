@@ -82,14 +82,16 @@ KEYWORD_RULES: list[tuple[str, list[str]]] = [
                              "personal injury", "mvc with injur", "rollover"]),
     ("Crash", ["accident", "crash", "mvc", "mva", "collision", "vehicle versus", "car versus"]),
     ("Structure Fire", ["structure fire", "house fire", "building fire", "apartment fire", "residential fire",
-                        "commercial fire", "fire in the", "flames showing", "smoke showing", "working fire"]),
+                        "commercial fire", "fire in the", "flames showing", "smoke showing", "working fire",
+                        "threatening a structure"]),
     ("Vehicle Fire", ["vehicle fire", "car fire", "truck fire", "car on fire", "vehicle on fire"]),
     ("Brush / Grass Fire", ["brush fire", "grass fire", "field fire", "mulch fire", "crop fire"]),
     ("Outside / Trash Fire", ["dumpster fire", "trash fire", "outside fire", "open burn", "burn complaint",
                               "illegal burn", "bonfire"]),
     ("CO Alarm", ["carbon monoxide", "co alarm", "co detector", "co investigation"]),
     ("Fire Alarm", ["fire alarm", "alarm activation", "general alarm", "smoke detector", "alarm company",
-                    "pull station", "waterflow", "water flow alarm", "smoke alarm"]),
+                    "pull station", "waterflow", "water flow alarm", "smoke alarm", "residential alarm",
+                    "commercial alarm"]),
     ("Gas Leak / Odor", ["gas leak", "odor of gas", "smell of gas", "natural gas", "gas odor", "gas line"]),
     ("Hazmat / Spill", ["hazmat", "hazardous material", "fuel spill", "chemical spill", "fuel leak"]),
     ("Smoke Investigation", ["odor of smoke", "smell of smoke", "smoke investigation", "smoke in the"]),
@@ -116,7 +118,8 @@ KEYWORD_RULES: list[tuple[str, list[str]]] = [
     ("Diabetic Problem", ["diabetic", "blood sugar", "hypoglycem"]),
     ("Allergic Reaction", ["allergic", "anaphyla", "bee sting"]),
     ("Pregnancy / Childbirth", ["pregnan", "in labor", "childbirth", "water broke"]),
-    ("Psychiatric / Behavioral", ["suicid", "psych", "mental health", "behavioral", "emotionally disturbed"]),
+    ("Psychiatric / Behavioral", ["suicid", "psych", "mental health", "behavioral", "emotionally disturbed",
+                                  "mental/emotional", "mental emotional"]),
     ("Assault / Violence", ["assault", "stabb", "gunshot", "shot ", "fight"]),
     ("Altered Mental Status", ["altered mental", "ams", "confused", "disoriented"]),
     ("Bleeding", ["bleeding", "hemorrhag", "laceration"]),
@@ -128,7 +131,7 @@ KEYWORD_RULES: list[tuple[str, list[str]]] = [
     ("Headache", ["headache"]),
     ("Interfacility Transfer", ["transfer", "transport from", "interfacility"]),
     ("Unknown Problem / Person Down", ["unknown medical", "unknown problem", "person down", "man down",
-                                       "medical assist"]),
+                                       "medical assist", "unknown call for ems", "unknown call"]),
     ("Public Assist", ["public assist", "citizen assist", "assist the"]),
     ("Sick Person", ["sick", "vomiting", "nausea", "weakness", "fever", "dizzy", "infection", "catheter",
                      "not feeling well", "pain"]),
@@ -137,7 +140,7 @@ KEYWORD_RULES: list[tuple[str, list[str]]] = [
 # ─────────────────────────────────────────────
 # Alarm vs. actual fire
 # ─────────────────────────────────────────────
-_ALARM_CUES = ("alarm", "detector", "alarm company", "pull station", "waterflow", "water flow", "sprinkler",
+_ALARM_CUES = ("alarm", "detector", "residential alarm", "commercial alarm", "alarm company", "pull station", "waterflow", "water flow", "sprinkler",
                "panel", "going off", "activation")
 _CO_CUES = ("carbon monoxide", "co alarm", "co detector", " co ")
 _FIRE_EVIDENCE = ("flames", "on fire", "fire showing", "smoke showing", "working fire", "fully involved",

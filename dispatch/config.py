@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# Release version, set by the image build from the git tag (VERSION build arg).
+VERSION = os.environ.get("APP_VERSION", "dev")
+
+
 def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
@@ -58,6 +62,11 @@ DATA_DIR = Path(_env("DATA_DIR", "data"))
 DB_PATH = Path(_env("DB_PATH", str(DATA_DIR / "dispatch.db")))
 AUDIO_DIR = Path(_env("AUDIO_DIR", str(DATA_DIR / "audio")))
 KEEP_AUDIO = _bool("KEEP_AUDIO", True)          # archive dispatch audio locally
+# Retention: audio clips, then call details (transcripts, summary, patient,
+# units), then the incident itself (type, location, departments, time).
+AUDIO_RETENTION_HOURS = int(_env("AUDIO_RETENTION_HOURS", "24"))
+DETAIL_RETENTION_DAYS = int(_env("DETAIL_RETENTION_DAYS", "7"))
+INCIDENT_RETENTION_DAYS = int(_env("INCIDENT_RETENTION_DAYS", "365"))
 # Read-only data baked into the Docker image at build time (Whisper model,
 # street index, place names) so a fresh install needs no first-run downloads.
 BUNDLE_DIR = Path(_env("BUNDLE_DIR", "/opt/bundle"))

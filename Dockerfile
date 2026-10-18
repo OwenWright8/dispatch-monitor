@@ -21,7 +21,9 @@ COPY --from=bundle /bundle /opt/bundle
 COPY dispatch/ dispatch/
 COPY web/ web/
 
-ENV DATA_DIR=/data \
+ARG VERSION=dev
+ENV APP_VERSION=${VERSION} \
+    DATA_DIR=/data \
     COUNTY=tippecanoe \
     BUNDLE_DIR=/opt/bundle \
     WHISPER_MODEL=small.en \
