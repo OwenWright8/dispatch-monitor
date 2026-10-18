@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from . import config, db, departments, extract, openmhz, settings, transcribe
-from .geo import Geocoder, GeoResult
+from .geo import Geocoder, GeoResult, parse_cross_streets
 from .taxonomy import category_for
 
 log = logging.getLogger(__name__)
@@ -29,7 +29,8 @@ TZ = ZoneInfo(config.TIMEZONE)
 PRECISION_RANK = {"address": 4, "intersection": 3, "place": 2, "street": 1, None: 0}
 
 status = {
-    "last_poll": None, "last_poll_error": None, "llm_ok": None, "llm_error": None,
+    "last_poll": None, "last_poll_error": None, "poll_failures": 0, "next_poll": None,
+    "llm_ok": None, "llm_error": None,
     "last_processed": None, "started": time.time(),
     "backfill": {"running": False, "hours": 0, "queued": 0, "error": None},
 }
@@ -140,19 +141,35 @@ def start_backfill(hours: float) -> bool:
 
 
 def poller_loop(stop: threading.Event):
-    try:
-        poll_once()
-    except Exception as e:
-        log.error(f"Initial poll failed: {e}")
-        status["last_poll_error"] = str(e)
-    if config.BACKFILL_HOURS > 0:
-        start_backfill(config.BACKFILL_HOURS)     # in its own thread; polling continues
-    while not stop.wait(settings.get("POLL_INTERVAL_S")):
+    """Polls for as long as the app runs. Failures never stop it: it backs off
+    (up to 5 minutes), the OpenMHz client switches session and browser identity,
+    and a backfill that failed is retried once the feed works again."""
+    backfill_due = config.BACKFILL_HOURS > 0
+    last_backfill_retry = 0.0
+    failures = 0
+    while True:
         try:
             poll_once()
+            if failures:
+                log.info(f"Feed recovered after {failures} failed poll(s) (identity {openmhz.identity()})")
+            failures = 0
+            bf = status["backfill"]
+            if backfill_due:
+                backfill_due = not start_backfill(config.BACKFILL_HOURS)   # in its own thread
+            elif bf["error"] and not bf["running"] and time.time() - last_backfill_retry > 1800:
+                last_backfill_retry = time.time()
+                log.info("Retrying the backfill that failed earlier")
+                start_backfill(bf["hours"] or config.BACKFILL_HOURS)
         except Exception as e:
-            status["last_poll_error"] = str(e)
-            log.error(f"Poll failed: {e}")
+            failures += 1
+            status["last_poll_error"] = str(e)[:300]
+            (log.warning if failures < 5 else log.error)(f"Poll failed ({failures} in a row): {e}")
+        status["poll_failures"] = failures
+        interval = settings.get("POLL_INTERVAL_S")
+        delay = interval if not failures else min(interval * 2 ** min(failures, 6), 300)
+        status["next_poll"] = time.time() + delay
+        if stop.wait(delay):
+            return
 
 
 # ─────────────────────────────────────────────
@@ -274,8 +291,8 @@ def llm_settings_changed():
 
 def _extract(transcript: str) -> tuple[dict, str]:
     global _llm_warned
-    # Ollama was down or the model missing: try again every 10 minutes.
-    if status["llm_ok"] is False and settings.get("LLM_ENABLED") and time.time() - _llm_last_prepare > 600:
+    # Ollama was down or the model missing: try again every 2 minutes.
+    if status["llm_ok"] is False and settings.get("LLM_ENABLED") and time.time() - _llm_last_prepare > 120:
         _prepare_llm()
     try:
         fields, method = extract.extract(transcript, use_llm=True)
@@ -302,11 +319,30 @@ def handle_transcript(tx, transcript: str, use_llm: bool = True) -> tuple[dict, 
     ch = config.CHANNELS.get(tx["talkgroup"])
     fields, method = _extract(transcript) if use_llm else extract.extract(transcript, use_llm=False)
     fields["departments"] = departments.detect(transcript, fields.get("units"), ch) or [ch.agency if ch else tx["agency"]]
+    fields["cross_streets"] = parse_cross_streets(transcript)
     geo = None
     if fields["is_dispatch"] and (fields["address"] or fields["place"]):
-        geo = geocoder().geocode(fields["address"], fields["place"], ch.city_hint if ch else config.PROFILE.name)
+        town, anchors = _department_towns(fields["departments"])
+        city = town or (ch.city_hint if ch else config.PROFILE.name)
+        if not anchors and ch:
+            anchors = [c for c in [config.PROFILE.city_centers.get(ch.city_hint.lower())] if c]
+        geo = geocoder().geocode(fields["address"], fields["place"], city, anchors, fields["cross_streets"])
     inc = attach(tx["time_ms"], fields["departments"], fields, geo, method)
     return fields, method, inc
+
+
+def _department_towns(names: list[str]) -> tuple[str | None, list]:
+    """Town name and map points of the departments sent: an address heard on a
+    Jackson Township call is looked up around Arcadia and Atlanta first."""
+    town, anchors = None, []
+    for name in names:
+        d = config.PROFILE.department(name)
+        for t in (d.towns if d else ()):
+            c = config.PROFILE.city_centers.get(t)
+            if c and c not in anchors:
+                anchors.append(c)
+                town = town or t.title()
+    return town, anchors
 
 
 def process(tx):

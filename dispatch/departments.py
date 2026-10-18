@@ -52,7 +52,37 @@ def normalize(transcript: str) -> str:
     for rx, rep in fixes:
         t = rx.sub(rep, t)
     t = re.sub(r"\b(TEAS)(?:[,.]?\s+TEAS\b)+", r"\1", t)   # "TEAS, TEAS" from overlapping fixes
+    t = join_house_numbers(t)
     return re.sub(r"[ \t]{2,}", " ", t).strip()
+
+
+_STREET_WORD = (r"(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|court|ct|way|place|pl|parkway|"
+                r"pkwy|trail|trl|circle|cir|highway|hwy|pike|terrace|crossing|run|pass|loop|row|point|ridge|bend|"
+                r"trace|commons|plaza|square|cove|path|walk|north|south|east|west)")
+# "12999, Pennsylvania Street" / "101, West Main Street" / "12,201, East 166th Street"
+_NUM_COMMA_STREET = re.compile(
+    r"\b(\d{1,6}),\s+(?=(?:north|south|east|west|n|s|e|w)?\.?\s*(?:[a-z][\w'.-]*|\d+(?:st|nd|rd|th))"
+    r"(?:\s+[\w'.-]+){0,3}?\s+" + _STREET_WORD + r"\b)", re.I)
+_UNIT_WORD_BEFORE = re.compile(r"\b(?:engine|ladder|truck|tower|medic|squad|rescue|tanker|brush|battalion|chief|"
+                               r"station|car|unit|ambulance|utility|grass|safety|edo|apartment|apt|room|suite|lot|"
+                               r"time|timeout|channel|ops|zone)\s*$", re.I)
+
+
+def join_house_numbers(t: str) -> str:
+    """Whisper writes the dispatcher's pause after a house number as a comma,
+    which the LLM then reads as a separate number. Put the address back together."""
+    t = re.sub(r"\b(\d{1,3}),(\d{3})\b(?!,\d)", r"\1\2", t)              # "12,201" -> "12201"
+    # "9730 Prairie Lake, Boulevard East": the street type split off by a pause
+    t = re.sub(r"\b(\d{1,6} (?:(?:north|south|east|west) )?[A-Z][\w']*(?: [A-Z][\w']*){0,2}), "
+               r"(Boulevard|Drive|Street|Road|Avenue|Lane|Court|Way|Parkway|Place|Circle|Trail|Pike|Run)\b",
+               r"\1 \2", t, flags=re.I)
+    t = re.sub(r"\b\d(?:-\d){2,4}\b", lambda m: m.group(0).replace("-", ""), t)   # "9-9-7-9" -> "9979"
+
+    def join(m: re.Match) -> str:
+        if _UNIT_WORD_BEFORE.search(t[:m.start()]):
+            return m.group(0)                                              # "Medic 355, Main Street"
+        return m.group(1) + " "
+    return _NUM_COMMA_STREET.sub(join, t)
 
 
 def _keep_lead(spoken: str):
@@ -65,7 +95,7 @@ def _keep_lead(spoken: str):
 
 _UNIT_NUM = re.compile(
     r"\b(?:engine|medic|rescue|squad|tanker|brush|ladder|truck|tower|chief|car|unit|utility|grass|battalion|"
-    r"ambulance|boat|support|command)[\s,]*(\d{2,4})\b", re.I)
+    r"ambulance|boat|support|command|edo|duty officer)[\s,]*(\d{2,4})\b", re.I)
 # Bare unit numbers in units the LLM returned: "924", "Station 1305"
 _BARE_NUM = re.compile(r"^\D*?(\d{2,4})\D*$")
 

@@ -23,7 +23,7 @@ import threading
 import time
 import zipfile
 from collections import defaultdict
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import requests
@@ -144,6 +144,51 @@ class GeoResult:
 
 def in_county(lat: float, lon: float) -> bool:
     return S <= lat <= N and W <= lon <= E
+
+
+@dataclass
+class Hints:
+    """What else the dispatch says about where it is, used to choose between
+    streets with the same name ("Main Street" is in Carmel, Arcadia, Sheridan…)."""
+    anchors: list = field(default_factory=list)   # (lat, lon) of the dispatched departments' towns
+    cross: list = field(default_factory=list)     # point lists of each cross street read out
+
+    def anchor_dist(self, p) -> float:
+        return min((_dist_m(p, a) for a in self.anchors), default=0.0)
+
+    def cross_dist(self, p) -> float:
+        return sum(min(min(_dist_m(p, q) for q in pts), 5_000) for pts in self.cross) if self.cross else 0.0
+
+    def rank(self, p) -> tuple[float, float]:
+        """Lower is better: cross streets first (they pin the block), then the department's town."""
+        return (round(self.cross_dist(p) / 150), self.anchor_dist(p))
+
+    @property
+    def near(self):
+        return self.anchors[0] if self.anchors else None
+
+
+# "cross of Stone Harbor Drive and Big Circle Drive", "Cross Off West 8th Street and West 9th Street"
+_CROSS_RE = re.compile(r"\bcross(?:ed|ing)?(?:\s*-?\s*(?:of|off|out|streets?|roads?|is|at))?\s*,?\s+(.+?)"
+                       r"(?=,\s*\d{1,3}(?:st|nd|rd|th)?\s+[a-z]+\b|,\s*(?:respond|tone time|timeout|time out|"
+                       r"ops)\b|[.;]|$)", re.I)
+_STREETISH = re.compile(r"\b(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|court|ct|way|place|"
+                        r"pl|parkway|pkwy|trail|circle|highway|hwy|pike|terrace|crossing|run|pass|loop|row|point|"
+                        r"ridge|bend|trace|commons|square|cove|path|us \d+|state road \d+|\d+(?:st|nd|rd|th))\b", re.I)
+
+
+def parse_cross_streets(text: str) -> list[str]:
+    """Cross streets read out after the address (Hamilton County dispatch does this every call)."""
+    m = _CROSS_RE.search(text or "")
+    if not m:
+        return []
+    parts = re.split(r"\s*,\s*(?:and\s+)?|\s+and\s+|\s*&\s*", m.group(1))
+    out = []
+    for p in parts:
+        p = p.strip(" .")
+        if p and _STREETISH.search(p) and len(p) <= 40 and p.lower() not in (x.lower() for x in out):
+            out.append(p)
+    return out[:4]
 
 
 def _dist_m(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -307,6 +352,7 @@ class TigerIndex:
     # ── geometry helpers ────────────────────────────────────────────────
     @staticmethod
     def _interpolate(pts, frac):
+        """Point at fraction frac along the polyline, and the index of its segment."""
         frac = min(max(frac, 0.0), 1.0)
         seg = [_dist_m(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
         total = sum(seg) or 1.0
@@ -315,62 +361,102 @@ class TigerIndex:
             if target <= d or i == len(seg) - 1:
                 f = target / d if d else 0
                 return (pts[i][0] + (pts[i + 1][0] - pts[i][0]) * f,
-                        pts[i][1] + (pts[i + 1][1] - pts[i][1]) * f)
+                        pts[i][1] + (pts[i + 1][1] - pts[i][1]) * f), i
             target -= d
-        return pts[0]
+        return pts[0], 0
 
-    def address(self, number: int, spoken_street: str, near=None) -> GeoResult | None:
+    # Address ranges are interpolated along the street's centerline; houses sit
+    # back from it. Move the pin this far toward the side the number is on.
+    SETBACK_M = 18
+
+    @classmethod
+    def _offset(cls, pts, i, lat, lon, left: bool):
+        if len(pts) < 2:
+            return lat, lon
+        a, b = pts[i], pts[min(i + 1, len(pts) - 1)]
+        k = math.cos(math.radians(lat))
+        dx, dy = (b[1] - a[1]) * k, b[0] - a[0]          # direction in equal-scale units (east, north)
+        n = math.hypot(dx, dy)
+        if not n:
+            return lat, lon
+        px, py = (-dy / n, dx / n) if left else (dy / n, -dx / n)   # TIGER left/right follow the edge direction
+        m = cls.SETBACK_M / 111_000
+        return lat + py * m, lon + px * m / k
+
+    def points(self, spoken_street: str) -> list:
+        """All vertices of the best-matching street(s), for cross-street distances."""
+        matches = self.match(spoken_street)
+        if not matches:
+            return []
+        best = matches[0][0]
+        return [p for score, _, tlids in matches if score >= best - 1 for t in tlids for p in self.edges[t]["pts"]]
+
+    def address(self, number: int, spoken_street: str, hints: "Hints | None" = None) -> GeoResult | None:
+        hints = hints or Hints()
         matches = self.match(spoken_street)
         if not matches:
             return None
         best_score = matches[0][0]
-        hits = []          # (exactness, distance-to-hint, GeoResult)
+        hits = []          # (street score, parity ok, GeoResult)
+        fallbacks = []
         for score, disp, tlids in matches:
             if score < best_score - 2.5:
                 break
             closest = None
             for tlid in tlids:
                 e = self.edges[tlid]
-                for f, t, z in ((e["lf"], e["lt"], e["zl"]), (e["rf"], e["rt"], e["zr"])):
+                for f, t, z, left in ((e["lf"], e["lt"], e["zl"], True), (e["rf"], e["rt"], e["zr"], False)):
                     if f is None or t is None:
                         continue
                     lo, hi = min(f, t), max(f, t)
                     if lo <= number <= hi:
                         frac = (number - f) / (t - f) if t != f else 0.5
-                        lat, lon = self._interpolate(e["pts"], frac)
-                        parity = 1 if (number % 2) == (f % 2) else 0
-                        res = GeoResult(lat, lon, "address", f"{number} {disp}", z, "tiger")
-                        hits.append((score + parity, -_dist_m((lat, lon), near) if near else 0, res))
+                        (lat, lon), i = self._interpolate(e["pts"], frac)
+                        lat, lon = self._offset(e["pts"], i, lat, lon, left)
+                        parity = (number % 2) == (f % 2)
+                        hits.append((score, parity, GeoResult(lat, lon, "address", f"{number} {disp}", z, "tiger")))
                     else:
                         gap = min(abs(number - lo), abs(number - hi))
                         if closest is None or gap < closest[0]:
                             end = e["pts"][0] if abs(number - f) < abs(number - t) else e["pts"][-1]
                             closest = (gap, end, z)
-            if not hits and closest and closest[0] <= 400:
+            if closest and closest[0] <= 400:
                 lat, lon = closest[1]
-                hits.append((score - 5, 0, GeoResult(lat, lon, "street", f"{number} {disp}", closest[2], "tiger")))
+                fallbacks.append((score, GeoResult(lat, lon, "street", f"{number} {disp}", closest[2], "tiger")))
         if hits:
-            hits.sort(key=lambda h: (-h[0], -h[1]))
-            return hits[0][2]
+            # Same-named streets score the same; the house number's side of the street
+            # decides within one street, the cross streets / department's town between streets.
+            top = max(h[0] for h in hits)
+            pool = [h for h in hits if h[0] >= top - 1]
+            if any(h[1] for h in pool):
+                pool = [h for h in pool if h[1]]
+            return min(pool, key=lambda h: hints.rank((h[2].lat, h[2].lon)))[2]
+        if fallbacks:
+            top = max(f[0] for f in fallbacks)
+            return min((f for f in fallbacks if f[0] >= top - 1), key=lambda f: hints.rank((f[1].lat, f[1].lon)))[1]
         return None
 
-    def street(self, spoken_street: str, near=None) -> GeoResult | None:
+    def street(self, spoken_street: str, hints: "Hints | None" = None) -> GeoResult | None:
+        hints = hints or Hints()
         matches = self.match(spoken_street)
         if not matches:
             return None
-        score, disp, tlids = matches[0]
-        pts = [p for t in tlids for p in self.edges[t]["pts"]]
-        if near:
-            lat, lon = min(pts, key=lambda p: _dist_m(p, near))
+        best = matches[0][0]
+        cands = [(disp, t) for score, disp, tlids in matches if score >= best - 1 for t in tlids]
+        if hints.anchors or hints.cross:
+            disp, tlid, (lat, lon) = min(((d, t, p) for d, t in cands for p in self.edges[t]["pts"]),
+                                         key=lambda x: hints.rank(x[2]))
         else:
+            disp, tlid = cands[0]
+            pts = [p for d, t in cands if d == disp for p in self.edges[t]["pts"]]
             lat, lon = pts[len(pts) // 2]
-        z = self.edges[tlids[0]]["zl"] or self.edges[tlids[0]]["zr"]
-        return GeoResult(lat, lon, "street", disp, z, "tiger")
+        e = self.edges[tlid]
+        return GeoResult(lat, lon, "street", disp, e["zl"] or e["zr"], "tiger")
 
-    def intersection(self, a: str, b: str, near=None) -> GeoResult | None:
+    def intersections(self, a: str, b: str) -> list[GeoResult]:
+        """Every place the two streets meet (two "Main & Washington" in different towns)."""
         ma, mb = self.match(a), self.match(b)
-        if not ma or not mb:
-            return None
+        out = []
         for sa, da, ta in ma[:3]:
             nodes_a = {}
             for t in ta:
@@ -378,18 +464,38 @@ class TigerIndex:
                 nodes_a[e["nf"]] = (e["pts"][0], e["zl"] or e["zr"])
                 nodes_a[e["nt"]] = (e["pts"][-1], e["zl"] or e["zr"])
             for sb, db, tb in mb[:3]:
-                shared = []
                 for t in tb:
                     e = self.edges[t]
                     for n in (e["nf"], e["nt"]):
                         if n in nodes_a:
-                            shared.append(nodes_a[n])
-                if shared:
-                    if near:
-                        shared.sort(key=lambda s: _dist_m(s[0], near))
-                    (lat, lon), z = shared[0]
-                    return GeoResult(lat, lon, "intersection", f"{da} & {db}", z, "tiger")
-        return None
+                            (lat, lon), z = nodes_a[n]
+                            out.append(GeoResult(lat, lon, "intersection", f"{da} & {db}", z, "tiger"))
+            if out:
+                break
+        return out
+
+    def intersection(self, a: str, b: str, hints: "Hints | None" = None) -> GeoResult | None:
+        hints = hints or Hints()
+        found = self.intersections(a, b)
+        return min(found, key=lambda r: hints.rank((r.lat, r.lon))) if found else None
+
+    def block(self, street: str, cross: list[str], hints: "Hints | None" = None) -> GeoResult | None:
+        """No usable house number: place the call on `street` between its cross streets."""
+        hints = hints or Hints()
+        ends = []
+        for c in cross:
+            found = self.intersections(street, c)
+            if found:
+                ends.append(min(found, key=lambda r: (min((_dist_m((r.lat, r.lon), (x.lat, x.lon)) for x in ends),
+                                                           default=0), hints.anchor_dist((r.lat, r.lon)))))
+        if not ends:
+            return None
+        if len(ends) >= 2 and _dist_m((ends[0].lat, ends[0].lon), (ends[1].lat, ends[1].lon)) < 2_000:
+            lat, lon = (ends[0].lat + ends[1].lat) / 2, (ends[0].lon + ends[1].lon) / 2
+            name = ends[0].matched.split(" & ")[0]
+            return GeoResult(lat, lon, "intersection", f"{name} near {ends[0].matched.split(' & ')[1]}",
+                             ends[0].zip, "tiger")
+        return ends[0]
 
 
 # ─────────────────────────────────────────────
@@ -562,8 +668,12 @@ def nominatim(query: str) -> GeoResult | None:
     if not in_county(lat, lon):
         return None
     prec = "address" if hit.get("addresstype") in ("building", "house") or hit.get("category") == "building" else "place"
-    return GeoResult(lat, lon, prec, hit.get("name") or hit["display_name"].split(",")[0],
-                     (hit.get("address") or {}).get("postcode"), "nominatim")
+    addr = hit.get("address") or {}
+    label = " ".join(x for x in (addr.get("house_number"), addr.get("road")) if x)   # "8250 North by Northeast Blvd"
+    name = hit.get("name") or ""
+    if not label or name and not name.replace(" ", "").isdigit() and prec == "place":
+        label = name or label or hit["display_name"].split(",")[0]
+    return GeoResult(lat, lon, prec, label, addr.get("postcode"), "nominatim")
 
 
 # ─────────────────────────────────────────────
@@ -610,44 +720,89 @@ class Geocoder:
         self._conn().execute("INSERT OR REPLACE INTO geocache(key, result) VALUES (?, ?)",
                              (key, json.dumps(res.to_dict()) if res else None))
 
-    def geocode(self, address: str | None, place: str | None, city_hint: str = "Lafayette") -> GeoResult | None:
-        near = CITY_CENTERS.get((city_hint or "").lower())
-        key = f"{(address or '').lower()}|{(place or '').lower()}|{(city_hint or '').lower()}"
+    def geocode(self, address: str | None, place: str | None, city_hint: str = "",
+                anchors=(), cross=()) -> GeoResult | None:
+        """anchors: (lat, lon) of the dispatched departments' towns; cross: cross-street names."""
+        anchors = list(anchors) or [c for c in [CITY_CENTERS.get((city_hint or "").lower())] if c]
+        cross = [c for c in cross if c]
+        key = (f"{(address or '').lower()}|{(place or '').lower()}|{(city_hint or '').lower()}|"
+               + ";".join(f"{a[0]:.3f},{a[1]:.3f}" for a in anchors) + "|" + ";".join(c.lower() for c in cross))
         hit, cached = self._cached(key)
         if hit:
             return cached
-        res = self._geocode(address, place, city_hint, near)
+        hints = Hints(anchors, [p for p in (self.tiger.points(c) if self.tiger else [] for c in cross) if p])
+        res = self._geocode(address, place, city_hint or config.PROFILE.name, hints, cross)
+        if res and res.precision == "street" and not self._plausible(res, hints):
+            res = None      # a fuzzy street match outside the department's area: better unmapped than wrong
+        if res and place and res.precision != "place":
+            # "12999 Pennsylvania St at Majestic Care": put the pin on the building
+            # when the named place is right there, not on the street centerline.
+            p = self.places.find(place, (res.lat, res.lon))
+            if p and _dist_m((p.lat, p.lon), (res.lat, res.lon)) < 400:
+                res = GeoResult(p.lat, p.lon, "address" if res.precision == "address" else "place",
+                                res.matched, res.zip, f"{res.source}+osm")
         self._store(key, res)
         return res
 
-    def _geocode(self, address, place, city_hint, near) -> GeoResult | None:
+    # How far from the dispatched departments' towns a call can plausibly be.
+    DISTRICT_M = 12_000      # a whole township (Carmel = Clay Township) fits inside
+
+    def _plausible(self, r: GeoResult, hints: Hints) -> bool:
+        p = (r.lat, r.lon)
+        if hints.cross and hints.cross_dist(p) < 800 * len(hints.cross):
+            return True                       # the cross streets read out are right there
+        if hints.cross and hints.anchors:
+            return hints.anchor_dist(p) <= self.DISTRICT_M and hints.cross_dist(p) < 2_500 * len(hints.cross)
+        return not hints.anchors or hints.anchor_dist(p) <= self.DISTRICT_M
+
+    def _geocode(self, address, place, city_hint, hints: Hints, cross: list[str]) -> GeoResult | None:
+        near = hints.near
+        street_only = None
         if address:
             a = clean_address(address)
             m = re.match(r"^(\d{1,6})\s+(.+)$", a)
             inter = re.split(r"\s+(?:and|&|at|near)\s+", re.sub(r"^(?:the )?intersection of\s+", "", a, flags=re.I), maxsplit=1)
             if m:
                 number, street = int(m.group(1)), m.group(2)
+                far = None
                 if self.tiger:
-                    r = self.tiger.address(number, street, near)
+                    r = self.tiger.address(number, street, hints)
                     if r and r.precision == "address":
-                        return r
+                        if self._plausible(r, hints):
+                            return r
+                        far = r      # a "101 W Main St" in another town; the right one may lack number ranges
+                    else:
+                        street_only = r
                 r2 = census_geocode(f"{number} {street}, {city_hint}, {config.STATE}")
-                if r2:
+                if r2 and self._plausible(r2, hints):
                     return r2
-                if r:      # right street, number off its known ranges
-                    return r
+                if place:            # "16600 Lear Street at Clarksville Christian Church": no Lear St, but the church is known
+                    p = self.places.find(place, near)
+                    if p and self._plausible(p, hints):
+                        return p
+                if self.tiger and cross:
+                    r = self.tiger.block(street, cross, hints)
+                    if r and self._plausible(r, hints):
+                        return r
+                if far:
+                    # Nothing placed the number in the department's own area, so trust the exact
+                    # match elsewhere: a Jackson Township medic covering a Sheridan call is still
+                    # a Sheridan address.
+                    return far
+                if street_only:      # right street, number off its known ranges
+                    return street_only
             elif len(inter) == 2 and self.tiger:
-                r = self.tiger.intersection(inter[0], inter[1], near)
+                r = self.tiger.intersection(inter[0], inter[1], hints)
                 if r:
                     return r
             elif self.tiger and not place:
-                r = self.tiger.street(a, near)
+                r = (self.tiger.block(a, cross, hints) if cross else None) or self.tiger.street(a, hints)
                 if r:
                     return r
         if place and self.tiger and not address and re.search(
                 r"\b(street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|parkway|pkwy|trail|court|ct)\b",
                 place, re.I):
-            r = self.tiger.street(place, near)    # "Warren Road" given as the place
+            r = self.tiger.street(place, hints)    # "Warren Road" given as the place
             if r:
                 return r
         if place:
@@ -665,7 +820,7 @@ class Geocoder:
             if self.tiger:   # last resort: just the street
                 street = re.sub(r"^\d+\s+", "", clean_address(address))
                 street = re.split(r"\s+(?:and|&|at)\s+", street)[0]
-                r = self.tiger.street(street, near)
+                r = (self.tiger.block(street, cross, hints) if cross else None) or self.tiger.street(street, hints)
                 if r:
                     return r
         return None

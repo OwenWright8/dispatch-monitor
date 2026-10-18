@@ -54,9 +54,13 @@ Units are called by station or number ({_P.unit_examples}).
 Fields:
 - is_dispatch: true ONLY if the dispatcher is sending units to a new incident at a location. \
 false for acknowledgements, en route / on scene / clearing reports, status checks, tests, traffic stops, \
-and anything without an incident location.
+a unit transporting a patient to a hospital ("en route to Riverview with one"), and anything without an \
+incident location.
 - address: the street address as spoken, house number first, without apartment/room/city \
-("2741 North Salisbury Street"). For an intersection use "Street A and Street B". \
+("2741 North Salisbury Street"). Always keep the house number when one is given. \
+"at <name>" after an address is the place, never part of the address. "cross of A and B" names the \
+cross streets near the address: they are not the address. Only when no house number is given and the \
+location is an intersection, use "Street A and Street B". \
 Fix obvious mishearing of local street names ({_P.street_hints}). null if none.
 - place: a named business/facility/landmark if given ({_P.place_examples}), else null.
 - nature: the single best match from the allowed list, judged from the complaint or what was reported. \
@@ -72,12 +76,7 @@ How to tell easily confused types apart:
 
 Allowed natures: {", ".join(ALL_NATURES)}."""
 
-EXAMPLES = [
-    ("TEAS, Buck Creek Fire, TEAS, Buck Creek Fire, be en route 5585 North 900 East, 5585 North 900 East, "
-     "smoke detector going off in the barn, no smoke or fire seen, tone time 0705.",
-     {"is_dispatch": True, "address": "5585 North 900 East", "place": None, "nature": "Fire Alarm",
-      "units": [], "patient_age": None, "patient_sex": None,
-      "summary": "Smoke detector sounding in barn, no fire seen."}),
+EXAMPLES = list(_P.examples) + [
     ("Station 7, stand by for a medical run, the 3106 Eagles Way Drive, Apartment 1309. Station 7, 3106 Eagles "
      "Way Drive. I have a 73-year-old male who fell in the bathroom, he's now stuck between the wall and the "
      "shower chair. Go channel 7.",
@@ -199,18 +198,37 @@ DISPATCH_CUES = re.compile(
     r"dispatch to|request for|time out|timeout)\b", re.I)
 
 
+_UNIT_BEFORE = re.compile(r"\b(?:engine|ladder|truck|tower|medic|squad|rescue|tanker|brush|battalion|chief|station|"
+                          r"car|unit|ambulance|utility|grass|safety|edo|apartment|apt|room|suite|lot|time|timeout)"
+                          r"[\s,]*$", re.I)
+
+
+# "16600 Lear Street at Clarksville Christian Church on a seizure"
+_AT_PLACE = re.compile(r"\b(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|court|ct|way|place|pl|"
+                       r"parkway|pkwy|trail|circle|pike|highway|east|west|north|south),?\s+at\s+(?:the\s+)?"
+                       r"([A-Z][\w'&.-]*(?:\s+(?:[A-Z][\w'&.-]*|of|and|&|on)){0,5})", re.I)
+_NOT_A_PLACE = re.compile(r"(?:unit|apartment|apt|room|number|lot|suite|scene|the scene|this time|time)\b", re.I)
+
+
 def rules_extract(transcript: str) -> dict:
     out = dict(EMPTY)
     text = transcript or ""
     for rx in ADDRESS_RES:
-        m = rx.search(text)
-        if m:
+        for m in rx.finditer(text):
+            # "Medic 355 101 West Main Street": 355 is the unit, not the house number
+            if _UNIT_BEFORE.search(text[:m.start()]):
+                continue
             out["address"] = " ".join(m.group(1).split())
+            break
+        if out["address"]:
             break
     if not out["address"]:
         m = INTERSECTION_RE.search(text)
         if m and re.search(_STREET_TYPES, m.group(1), re.I):
             out["address"] = " ".join(m.group(1).split())
+    m = _AT_PLACE.search(text)
+    if m and not _NOT_A_PLACE.match(m.group(1)):
+        out["place"] = m.group(1).strip()
     out["nature"] = nature_from_keywords(text) or "Other"
     seen, units = set(), []
     for m in UNIT_RE.finditer(text):
@@ -247,6 +265,26 @@ def extract(transcript: str, use_llm: bool = True) -> tuple[dict, str]:
     return refine(rules_extract(transcript), transcript), "rules"
 
 
+# "Medic 605 is en route to IU with one", "16 in route to Franciscan, one": a unit
+# taking a patient to the hospital, not a new call at the hospital.
+_TRANSPORT = re.compile(r"\b(?:en ?route|in ?route|on route|enroute|transport(?:ing|ed)?|heading|headed|"
+                        r"arriv(?:ed|ing)|on the way|going to)\b", re.I)
+_HOSPITAL_WORDS = ["hospital", "emergency room", "iu", "iu health", "methodist", "eskenazi", "riley", "ascension",
+                   r"st\.? ?vincent'?s?", "community", "franciscan", "arnett", "unity", r"st\.? ?elizabeth",
+                   "riverview"] + [re.escape(h.lower()) for h in _P.hospitals]
+_HOSPITAL = re.compile(r"\b(?:" + "|".join(_HOSPITAL_WORDS) + r")\b", re.I)
+_WITH_PATIENT = re.compile(r"\bwith (?:one|1|two|2|three|3)\b(?!\s+(?:vehicles?|cars?|engines?|units?))"
+                           r"|\bwith (?:a|one|1|the) patient\b", re.I)
+_DISPATCH_TONE = re.compile(r"\b(?:tone time|time ?out|stand ?by for|medical run|respond(?:ing)? to|go channel|"
+                            r"fire run|be en route to \d)", re.I)
+
+
+def is_transport_report(transcript: str) -> bool:
+    t = transcript or ""
+    return bool(_TRANSPORT.search(t) and (_HOSPITAL.search(t) or _WITH_PATIENT.search(t))
+                and not _DISPATCH_TONE.search(t))
+
+
 _BEATS_SICK_PERSON = {"Stroke", "Seizure", "Medical Alarm", "Lift Assist", "Choking", "Cardiac Arrest",
                       "Heart Problem / Blood Pressure", "Unknown Problem / Person Down"}
 
@@ -264,6 +302,8 @@ def refine(out: dict, transcript: str) -> dict:
         nature = med                      # "speech issues, weak" is a stroke workup, not just sick
     out["nature"] = nature if nature in ALL_NATURES else "Other"
     out["units"] = list(dict.fromkeys(u for u in map(departments.clean_unit, out["units"]) if u))
+    if out["is_dispatch"] and is_transport_report(transcript):
+        out["is_dispatch"] = False
     return out
 
 
@@ -281,7 +321,10 @@ def ground(out: dict, transcript: str) -> dict:
     """Small models occasionally invent or 'correct' details. Keep only what the
     transcript supports, falling back to the rules extractor's address."""
     t_low = transcript.lower()
-    rules_addr = rules_extract(transcript)["address"]
+    rules = rules_extract(transcript)
+    rules_addr = rules["address"]
+    if not out["place"] and rules["place"]:
+        out["place"] = re.split(r"\s+(?:on|for|and)\s+(?:a|an|the)\b", rules["place"])[0]
     addr = out["address"]
     if addr:
         m = re.match(r"^\s*(\d[\d\s.-]*)\s+(.*)$", addr)
@@ -299,6 +342,13 @@ def ground(out: dict, transcript: str) -> dict:
                 addr = rules_addr
             elif not words_ok and rules_addr and rules_addr.split()[0] == number:
                 addr = rules_addr          # model swapped the street name; trust what was said
+        elif rules_addr and re.match(r"^\d", rules_addr):
+            # Model dropped the house number ("Pennsylvania Street and Majestic Care")
+            # but one was said: "12999 Pennsylvania Street at Majestic Care".
+            tail = re.split(r"\s+(?:and|&)\s+", addr, maxsplit=1)
+            if out["place"] is None and len(tail) == 2 and not re.search(_STREET_TYPES, tail[1], re.I):
+                out["place"] = tail[1]
+            addr = rules_addr
         elif out["place"] is None and not re.search(r"\b(and|&)\b", addr):
             out["place"], addr = addr, None  # "co-rec" is a place, not an address
     if out["is_dispatch"] and not addr and not out["place"]:
