@@ -216,9 +216,12 @@ def rules_extract(transcript: str) -> dict:
     out = dict(EMPTY)
     text = transcript or ""
     for rx in ADDRESS_RES:
-        for m in rx.finditer(text):
-            # "Medic 355 101 West Main Street": 355 is the unit, not the house number
+        pos = 0
+        while (m := rx.search(text, pos)) is not None:
+            # "Medic 355 101 West Main Street": 355 is the unit, not the house number;
+            # look again just after it so "101 West Main Street" is still found
             if _UNIT_BEFORE.search(text[:m.start()]):
+                pos = m.start() + len(m.group(1).split()[0])
                 continue
             out["address"] = " ".join(m.group(1).split())
             break
