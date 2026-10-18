@@ -339,8 +339,8 @@ def _department_towns(names: list[str]) -> tuple[str | None, list]:
         d = config.PROFILE.department(name)
         for t in (d.towns if d else ()):
             c = config.PROFILE.city_centers.get(t)
-            if c and c not in anchors:
-                anchors.append(c)
+            if c and c not in [a[:2] for a in anchors]:
+                anchors.append((*c, d.reach_km * 1000 if d.reach_km else None))
                 town = town or t.title()
     return town, anchors
 
