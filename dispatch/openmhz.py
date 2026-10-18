@@ -18,7 +18,7 @@ from datetime import datetime
 
 from curl_cffi import requests as cr
 
-from . import config
+from . import config, settings
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def _session() -> cr.Session:
 
 
 def _filter() -> dict:
-    return {"filter-type": "talkgroup", "filter-code": ",".join(str(t) for t in config.CHANNELS)}
+    return {"filter-type": "talkgroup", "filter-code": ",".join(str(t) for t in settings.enabled_channels()) or "0"}
 
 
 def _get(path: str, **params) -> dict:

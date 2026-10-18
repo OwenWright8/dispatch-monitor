@@ -41,8 +41,10 @@ def main():
     log.info(f"County: {config.PROFILE.name}, {config.PROFILE.state} (OpenMHz system {config.OPENMHZ_SYSTEM})")
     log.info(f"Monitoring {len(config.CHANNELS)} channels: "
              + ", ".join(f"{c.agency} ({c.talkgroup})" for c in config.CHANNELS.values()))
-    log.info(f"Whisper {config.WHISPER_MODEL} | LLM "
-             + (f"{config.OLLAMA_MODEL} @ {config.OLLAMA_URL}" if config.LLM_ENABLED else "disabled (rules only)"))
+    from . import settings
+    log.info(f"Whisper {settings.get('WHISPER_MODEL')} | LLM "
+             + (f"{settings.get('OLLAMA_MODEL')} @ {settings.get('OLLAMA_URL')}" if settings.get("LLM_ENABLED")
+                else "disabled (rules only)"))
     stop = threading.Event()
     threading.Thread(target=pipeline.poller_loop, args=(stop,), name="poller", daemon=True).start()
     threading.Thread(target=pipeline.worker_loop, args=(stop,), name="worker", daemon=True).start()

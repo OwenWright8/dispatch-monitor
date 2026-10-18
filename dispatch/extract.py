@@ -15,7 +15,7 @@ import time
 
 import requests
 
-from . import config, departments
+from . import config, departments, settings
 from .taxonomy import ALL_NATURES, NATURE_GUIDE, category_for, nature_from_keywords, reconcile_fire_alarm
 
 log = logging.getLogger(__name__)
@@ -109,34 +109,34 @@ def ensure_model(wait_s: int = 0, on_status=None) -> bool:
     deadline = time.time() + wait_s
     while True:
         try:
-            tags = requests.get(f"{config.OLLAMA_URL}/api/tags", timeout=10).json().get("models", [])
+            tags = requests.get(f"{settings.get("OLLAMA_URL")}/api/tags", timeout=10).json().get("models", [])
             break
         except Exception as e:
             if time.time() >= deadline:
-                log.warning(f"Ollama not reachable at {config.OLLAMA_URL} ({e}); using keyword rules until it is")
+                log.warning(f"Ollama not reachable at {settings.get("OLLAMA_URL")} ({e}); using keyword rules until it is")
                 return False
             time.sleep(5)
     names = {m.get("name") for m in tags} | {m.get("model") for m in tags}
-    want = config.OLLAMA_MODEL if ":" in config.OLLAMA_MODEL else f"{config.OLLAMA_MODEL}:latest"
+    want = settings.get("OLLAMA_MODEL") if ":" in settings.get("OLLAMA_MODEL") else f"{settings.get("OLLAMA_MODEL")}:latest"
     if want in names:
         return True
-    log.info(f"Downloading {config.OLLAMA_MODEL} into Ollama (one-time, a few GB)…")
+    log.info(f"Downloading {settings.get("OLLAMA_MODEL")} into Ollama (one-time, a few GB)…")
     if on_status:
-        on_status(f"Downloading AI model {config.OLLAMA_MODEL} (first start only)")
+        on_status(f"Downloading AI model {settings.get("OLLAMA_MODEL")} (first start only)")
     try:
-        r = requests.post(f"{config.OLLAMA_URL}/api/pull", json={"model": config.OLLAMA_MODEL, "stream": False},
+        r = requests.post(f"{settings.get("OLLAMA_URL")}/api/pull", json={"model": settings.get("OLLAMA_MODEL"), "stream": False},
                           timeout=3600)
         r.raise_for_status()
-        log.info(f"Pulled {config.OLLAMA_MODEL}")
+        log.info(f"Pulled {settings.get("OLLAMA_MODEL")}")
         return True
     except Exception as e:
-        log.warning(f"Could not pull {config.OLLAMA_MODEL}: {e}")
+        log.warning(f"Could not pull {settings.get("OLLAMA_MODEL")}: {e}")
         return False
 
 
 def llm_extract(transcript: str) -> dict:
     payload = {
-        "model": config.OLLAMA_MODEL,
+        "model": settings.get("OLLAMA_MODEL"),
         "messages": _messages(transcript),
         "stream": False,
         "format": SCHEMA,
@@ -144,11 +144,11 @@ def llm_extract(transcript: str) -> dict:
         "options": {"temperature": 0, "num_predict": 220, "num_ctx": 4096},
     }
     try:
-        r = requests.post(f"{config.OLLAMA_URL}/api/chat", json=payload, timeout=config.OLLAMA_TIMEOUT_S)
+        r = requests.post(f"{settings.get("OLLAMA_URL")}/api/chat", json=payload, timeout=settings.get("OLLAMA_TIMEOUT_S"))
     except requests.exceptions.ConnectionError as e:
         raise LLMUnavailable(str(e)) from e
     if r.status_code == 404 and "not found" in r.text:
-        raise LLMUnavailable(f"model {config.OLLAMA_MODEL} not pulled: run `ollama pull {config.OLLAMA_MODEL}`")
+        raise LLMUnavailable(f"model {settings.get("OLLAMA_MODEL")} not pulled: run `ollama pull {settings.get("OLLAMA_MODEL")}`")
     r.raise_for_status()
     data = json.loads(r.json()["message"]["content"])
     return _clean(data)
@@ -241,7 +241,7 @@ def extract(transcript: str, use_llm: bool = True) -> tuple[dict, str]:
     """Returns (fields, method) where method is 'llm', 'rules', or 'skipped'."""
     if not transcript or not looks_relevant(transcript):
         return dict(EMPTY), "skipped"
-    if use_llm and config.LLM_ENABLED:
+    if use_llm and settings.get("LLM_ENABLED"):
         out = llm_extract(transcript)   # LLMUnavailable propagates so the worker can retry later
         return refine(ground(out, transcript), transcript), "llm"
     return refine(rules_extract(transcript), transcript), "rules"

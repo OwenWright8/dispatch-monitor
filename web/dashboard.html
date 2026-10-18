@@ -180,6 +180,21 @@ tr.click { cursor: pointer; } tr.click:hover td { background: var(--surface-2); 
 .tx p { font-size: 13px; color: var(--ink-2); }
 .tx audio { width: 100%; height: 32px; margin-top: 6px; }
 .prec { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--surface-2); color: var(--ink-2); margin-left: 6px; }
+/* settings */
+.set-group { margin: 16px 0 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.set-row { display: grid; grid-template-columns: 1fr minmax(0, 220px); gap: 4px 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--grid); }
+.set-row label.name { font-size: 13px; font-weight: 600; }
+.set-row .help { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+.set-row input[type=text], .set-row input[type=number], .set-row input[type=password], .set-row select { width: 100%; border: 1px solid var(--grid); background: var(--surface); border-radius: 7px; padding: 4px 8px; font-size: 13px; }
+.set-row .chans { display: grid; gap: 3px; font-size: 13px; }
+.set-row .reset { border: 0; background: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 0; justify-self: start; }
+.set-row.changed label.name::after { content: " ●"; color: var(--accent); font-size: 10px; vertical-align: 2px; }
+.set-foot { display: flex; gap: 8px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+.set-msg { font-size: 13px; color: var(--ink-2); }
+.set-msg.err { color: var(--stale); }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.version { color: var(--muted); font-size: 11px; }
+@media (max-width: 900px) { .set-row { grid-template-columns: 1fr; } }
 .tx .raw { margin-top: 4px; font-size: 12px; color: var(--muted); }
 .tx .raw summary { cursor: pointer; }
 
@@ -237,6 +252,7 @@ tr.click { cursor: pointer; } tr.click:hover td { background: var(--surface-2); 
   </span>
   <div class="spacer"></div>
   <a class="btn" id="csvBtn" href="#" download>Export CSV</a>
+  <button class="btn" id="settingsBtn" title="Change how the monitor works">Settings</button>
   <div class="tabs" role="tablist">
     <button class="on" data-view="mapView" role="tab">Map</button>
     <button data-view="statsView" role="tab">Statistics</button>
@@ -570,6 +586,81 @@ function closeModal() {
   document.querySelectorAll("#modalBody audio").forEach(a => a.pause());
 }
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+// ─────────────────────────────────────────────
+// Settings
+// ─────────────────────────────────────────────
+let SETTINGS = [];
+const adminPw = {
+  get() { try { return sessionStorage.getItem("dm.admin") || ""; } catch { return ""; } },
+  set(v) { try { sessionStorage.setItem("dm.admin", v); } catch {} },
+};
+async function openSettings(msg = "", err = false) {
+  const [s, models] = await Promise.all([
+    fetch("api/settings").then(r => r.json()),
+    fetch("api/ollama/models").then(r => r.json()).catch(() => ({ models: [] })),
+  ]);
+  SETTINGS = s.settings;
+  const field = st => {
+    const id = `set-${st.key}`, v = st.value;
+    if (st.kind === "bool") return `<input type="checkbox" id="${id}" ${v ? "checked" : ""}>`;
+    if (st.kind === "int") return `<input type="number" id="${id}" value="${esc(v)}" min="${st.min ?? ""}" max="${st.max ?? ""}">`;
+    if (st.kind === "choice") return `<select id="${id}">${st.choices.map(c => `<option ${c === v ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`;
+    if (st.kind === "channels") {
+      const on = new Set(String(v).split(",").map(Number));
+      return `<div class="chans" id="${id}">${st.channels.map(c => `<label><input type="checkbox" value="${c.talkgroup}" ${on.has(c.talkgroup) ? "checked" : ""}> ${esc(c.label)} <span style="color:var(--muted)">(${c.talkgroup})</span></label>`).join("")}</div>`;
+    }
+    const list = st.key === "OLLAMA_MODEL" && models.models.length ? `list="ollamaModels"` : "";
+    return `<input type="text" id="${id}" value="${esc(v)}" ${list} spellcheck="false" autocomplete="off">`;
+  };
+  let group = "", html = `<button class="x" aria-label="Close">×</button><h3>Settings</h3>
+    <div class="meta">Saved here, these override the stack's .env and apply within a few seconds — no restart.
+      <span class="version">Version ${esc(s.version)}</span></div>
+    <datalist id="ollamaModels">${models.models.map(m => `<option value="${esc(m)}">`).join("")}</datalist>`;
+  for (const st of SETTINGS) {
+    if (st.group !== group) { group = st.group; html += `<div class="set-group">${esc(group)}</div>`; }
+    html += `<div class="set-row ${st.changed ? "changed" : ""}" data-key="${st.key}">
+      <label class="name" for="set-${st.key}">${esc(st.label)}</label>${field(st)}
+      ${st.help || st.changed ? `<div class="help">${esc(st.help)}${st.changed ? ` <button class="reset" data-reset="${st.key}">Reset to default (${esc(st.kind === "channels" ? "all" : st.default === "" ? "empty" : String(st.default))})</button>` : ""}</div>` : ""}
+    </div>`;
+  }
+  html += `<div class="set-foot">
+      ${s.locked ? `<input type="password" id="adminPw" placeholder="Admin password" value="${esc(adminPw.get())}" style="max-width:200px" autocomplete="current-password">` : ""}
+      <button class="btn primary" id="saveSettings">Save</button>
+      <span class="set-msg ${err ? "err" : ""}" id="setMsg">${esc(msg)}</span></div>
+    ${models.ok === false ? `<div class="set-msg err" style="margin-top:8px">Can't reach Ollama at the configured address: ${esc(models.error)}</div>` : ""}`;
+  document.getElementById("modalBody").innerHTML = html;
+  document.getElementById("modal").classList.add("open");
+}
+function readSetting(st) {
+  const el = document.getElementById(`set-${st.key}`);
+  if (st.kind === "bool") return el.checked;
+  if (st.kind === "int") return Number(el.value);
+  if (st.kind === "channels") return [...el.querySelectorAll("input:checked")].map(i => i.value).join(",");
+  return el.value.trim();
+}
+async function saveSettings(body) {
+  const pwEl = document.getElementById("adminPw");
+  if (pwEl) adminPw.set(pwEl.value);
+  const r = await fetch("api/settings", { method: "PUT", body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json", "X-Admin-Password": pwEl ? pwEl.value : "" } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return openSettings(j.detail || `Error ${r.status}`, true);
+  await openSettings(j.changed.length ? "Saved." : "Nothing changed.");
+  const m = await fetch("api/meta").then(r => r.json()).catch(() => null);
+  if (m && m.carto_key !== cartoKey) { cartoKey = m.carto_key; setBasemap(); }
+  loadStatus();
+}
+document.getElementById("settingsBtn").addEventListener("click", () => openSettings());
+document.getElementById("modalBody").addEventListener("click", e => {
+  if (e.target.id === "saveSettings") {
+    const body = {};
+    for (const st of SETTINGS) { const v = readSetting(st); if (String(v) !== String(st.value)) body[st.key] = v; }
+    saveSettings(body);
+  }
+  const rs = e.target.closest("[data-reset]");
+  if (rs) saveSettings({ [rs.dataset.reset]: null });
+});
 
 // ─────────────────────────────────────────────
 // Tooltip
