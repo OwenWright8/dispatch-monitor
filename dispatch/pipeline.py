@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from . import config, db, departments, extract, openmhz, settings, transcribe
-from .geo import Geocoder, GeoResult, parse_cross_streets
+from .geo import Geocoder, GeoResult, Hints, parse_cross_streets
 from .taxonomy import category_for
 
 log = logging.getLogger(__name__)
@@ -245,6 +245,13 @@ def attach(time_ms: int, depts: list[str], fields: dict, geo: GeoResult | None, 
         if geo and PRECISION_RANK.get(geo.precision, 0) > PRECISION_RANK.get(row["precision"], 0):
             upd.update(lat=geo.lat, lon=geo.lon, precision=geo.precision, matched=geo.matched,
                        zip=geo.zip, geo_source=geo.source)
+        elif geo and row["lat"] is not None and geo.precision == row["precision"]:
+            # The pre-alert said "690 Washington Street", the tone-out "690 Waldron Street":
+            # keep whichever is clearly in the dispatched departments' area.
+            h = Hints(_department_towns(agencies)[1])
+            if h.anchors and h.anchor_dist((geo.lat, geo.lon)) + 1_000 < h.anchor_dist((row["lat"], row["lon"])):
+                upd.update(lat=geo.lat, lon=geo.lon, matched=geo.matched, zip=geo.zip, geo_source=geo.source,
+                           address=fields.get("address") or row["address"])
         lt = _local(upd["first_ms"])
         upd.update(local_date=lt.strftime("%Y-%m-%d"), local_hour=lt.hour, local_dow=lt.weekday())
         c.execute(f"UPDATE incidents SET {', '.join(f'{k}=?' for k in upd)} WHERE id=?",
