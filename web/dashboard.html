@@ -566,6 +566,9 @@ async function openIncident(id, fly) {
       ${i.units.length ? `<dt>Units</dt><dd>${esc(i.units.join(", "))}</dd>` : ""}
       ${i.zip ? `<dt>ZIP</dt><dd>${esc(i.zip)}</dd>` : ""}
     </dl>
+    ${!(i.transmissions || []).length ? `<div class="tx"><p style="color:var(--muted)">Transcripts, audio and call
+      details for this incident have expired. Only the call type, location and departments are kept
+      (Settings → Data retention).</p></div>` : ""}
     ${(i.transmissions || []).map(t => `<div class="tx">
       <div class="h">${esc(t.agency)} · ${new Date(t.time_ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} · ${t.len_s}s</div>
       <p>${esc(t.transcript || "")}</p>

@@ -48,6 +48,7 @@ def main():
     stop = threading.Event()
     threading.Thread(target=pipeline.poller_loop, args=(stop,), name="poller", daemon=True).start()
     threading.Thread(target=pipeline.worker_loop, args=(stop,), name="worker", daemon=True).start()
+    threading.Thread(target=pipeline.housekeeping_loop, args=(stop,), name="retention", daemon=True).start()
 
     if args.no_web:
         try:

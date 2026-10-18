@@ -130,6 +130,8 @@ def backfill(hours: float, _locked: bool = False) -> int:
 
 def start_backfill(hours: float) -> bool:
     """Start a backfill in the background; False if one is already running."""
+    # Calls older than the detail retention would only be deleted again.
+    hours = min(hours, settings.get("DETAIL_RETENTION_DAYS") * 24)
     if not _backfill_lock.acquire(blocking=False):
         return False
     status["backfill"]["running"] = True
@@ -357,10 +359,75 @@ def worker_loop(stop: threading.Event):
             stop.wait(5)
 
 
-def reprocess(use_llm: bool = True):
-    """Rebuild every incident from stored transcripts (after prompt/taxonomy/geocoder changes)."""
+# ─────────────────────────────────────────────
+# Retention
+# ─────────────────────────────────────────────
+def housekeeping() -> dict:
+    """Apply the retention settings: delete audio clips, then call details
+    (transcripts, summaries, patient info, units), then whole incidents."""
     c = db.conn()
-    c.execute("DELETE FROM incidents")
+    now = time.time() * 1000
+    audio_cut = now - settings.get("AUDIO_RETENTION_HOURS") * 3_600_000
+    detail_cut = now - settings.get("DETAIL_RETENTION_DAYS") * 86_400_000
+    incident_cut = now - settings.get("INCIDENT_RETENTION_DAYS") * 86_400_000
+    done = {"audio": 0, "transmissions": 0, "details": 0, "incidents": 0}
+
+    for tx_id, path in c.execute("SELECT id, audio_path FROM transmissions WHERE audio_path IS NOT NULL "
+                                 "AND (time_ms < ? OR time_ms < ?)", (audio_cut, detail_cut)).fetchall():
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        c.execute("UPDATE transmissions SET audio_path=NULL WHERE id=?", (tx_id,))
+        done["audio"] += 1
+    # Clips no row points at any more (e.g. from before this ran), by file age
+    if config.AUDIO_DIR.exists():
+        for f in config.AUDIO_DIR.rglob("*.m4a"):
+            try:
+                if f.stat().st_mtime * 1000 < audio_cut:
+                    f.unlink()
+                    done["audio"] += 1
+            except OSError:
+                pass
+        for d in sorted((p for p in config.AUDIO_DIR.rglob("*") if p.is_dir()), key=lambda p: -len(p.parts)):
+            try:
+                d.rmdir()                       # only succeeds when empty
+            except OSError:
+                pass
+
+    done["transmissions"] = c.execute("DELETE FROM transmissions WHERE time_ms < ?", (detail_cut,)).rowcount
+    done["details"] = c.execute(
+        "UPDATE incidents SET summary=NULL, patient_age=NULL, patient_sex=NULL, units='[]' WHERE last_ms < ? "
+        "AND (summary IS NOT NULL OR patient_age IS NOT NULL OR patient_sex IS NOT NULL OR units <> '[]')",
+        (detail_cut,)).rowcount
+    done["incidents"] = c.execute("DELETE FROM incidents WHERE first_ms < ?", (incident_cut,)).rowcount
+    if any(done.values()):
+        log.info("Retention: removed {audio} audio clips, {transmissions} transmissions, details of {details} "
+                 "incidents, {incidents} incidents".format(**done))
+    return done
+
+
+def housekeeping_loop(stop: threading.Event):
+    while not stop.is_set():
+        try:
+            housekeeping()
+        except Exception as e:
+            log.warning(f"Retention cleanup failed: {e}")
+        stop.wait(900)
+
+
+def reprocess(use_llm: bool = True):
+    """Rebuild incidents from stored transcripts (after prompt/taxonomy/geocoder changes).
+
+    Transcripts are only kept for DETAIL_RETENTION_DAYS, so only incidents from
+    that period are rebuilt; older incidents (type, location, departments) stay."""
+    c = db.conn()
+    oldest = c.execute("SELECT MIN(time_ms) FROM transmissions WHERE status='done' AND transcript IS NOT NULL"
+                       ).fetchone()[0]
+    if oldest is None:
+        log.info("No stored transcripts to reprocess")
+        return
+    c.execute("DELETE FROM incidents WHERE last_ms >= ?", (oldest,))
     c.execute("DELETE FROM geocache")      # geocoder may have improved since these were cached
     c.execute("UPDATE transmissions SET incident_id=NULL")
     rows = c.execute("SELECT * FROM transmissions WHERE status='done' AND transcript IS NOT NULL "

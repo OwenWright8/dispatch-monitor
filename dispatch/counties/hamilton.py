@@ -1,6 +1,6 @@
 """Hamilton County, Indiana (Carmel, Fishers, Noblesville, Westfield and the
-smaller departments: Cicero, Jackson Township, Sheridan, Atlanta, Wayne
-Township, White River Township).
+smaller departments: Cicero, Jackson Township (Arcadia and Atlanta),
+Sheridan, Wayne Township, White River Township).
 
 Radio: MESA (formerly IDPS) System 3 simulcast, carried on OpenMHz as
 "hamiltonco". County dispatch tones out by unit, not by department name
@@ -33,12 +33,11 @@ DEPARTMENTS = (
     # ── Smaller town and township departments ──────────────────────────
     Department("Cicero Fire", spoken="Cicero Fire", unit_prefixes=("32x", "2x"), area="Cicero",
                aliases=(r"\b(?:cicero|sisero|sicero|cisero|sis arrow|sister o)" + FIRE,)),
+    # Jackson Township covers Arcadia and Atlanta; there is no separate Atlanta department.
     Department("Jackson Township Fire", spoken="Jackson Township Fire", unit_prefixes=("35x", "5x"),
-               area="Jackson Township / Arcadia",
+               area="Jackson Township / Arcadia & Atlanta",
                aliases=(r"\bjackson township fire\b", r"\bjackson (?:twp\.? )?fire\b", r"\bjackson fire territory\b",
-                        r"\b(?:arcadia|arcadian|arcadia's)" + FIRE)),
-    Department("Atlanta Fire", spoken="Atlanta Fire", area="Town of Atlanta",
-               aliases=(r"\b(?:atlanta|atlantic)" + FIRE,)),
+                        r"\b(?:arcadia|arcadian|arcadia's|atlanta|atlantic)" + FIRE)),
     Department("Sheridan Fire", spoken="Sheridan Fire", unit_prefixes=("36x", "6x"), area="Sheridan / Adams Township",
                aliases=(r"\b(?:sheridan|sharidan|sheriden|sherridan)" + FIRE,)),
     Department("Wayne Township Fire", spoken="Wayne Township Fire", unit_prefixes=("31x", "1x"),
@@ -47,9 +46,6 @@ DEPARTMENTS = (
     Department("White River Township Fire", spoken="White River Fire", unit_prefixes=("33x", "3x"),
                area="White River Township / Strawtown",
                aliases=(r"\bwhite river" + FIRE, r"\bwhite rivers? fire\b")),
-    # ── Ambulance contracts ────────────────────────────────────────────
-    Department("Seals Ambulance", kind="ems", spoken="Seals Ambulance", area="Contract ambulance (Atlanta)",
-               aliases=(r"\b(?:seals|seal's|ceils|ceals) ambulance\b",)),
     # ── Mutual aid from neighbouring counties ──────────────────────────
     Department("Zionsville Fire", area="Mutual aid · Boone County", detect=(r"\bzionsville fire\b",)),
     Department("Lawrence Fire", area="Mutual aid · Marion County", detect=(r"\blawrence fire\b",)),
@@ -92,7 +88,7 @@ PROFILE = Profile(
     },
     whisper_prompt=(
         "Hamilton County fire and EMS dispatch, Indiana. Carmel Fire, Fishers Fire, Noblesville Fire, "
-        "Westfield Fire, Cicero Fire, Jackson Township Fire, Arcadia, Atlanta Fire, Sheridan Fire, "
+        "Westfield Fire, Cicero Fire, Jackson Township Fire, Arcadia, Atlanta, Sheridan Fire, "
         "Wayne Township Fire, White River Township Fire. Medic 341, Engine 391, Ladder 381, Engine 321, "
         "Medic 355, Engine 361, Battalion 370. Sick person, respond, tone time. Meridian Street, Keystone "
         "Parkway, 116th Street, 146th Street, Allisonville Road, State Road 37, State Road 32, State Road 19, "
