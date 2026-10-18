@@ -36,6 +36,9 @@ class Department:
     # looked up near these first: "101 W Main St" for Jackson Township is in
     # Arcadia, not Carmel.
     towns: tuple[str, ...] = ()
+    # How far from those towns its calls can be (km); None = the default
+    # township-sized district. Purdue Fire stays on campus.
+    reach_km: float | None = None
 
 
 @dataclass(frozen=True)

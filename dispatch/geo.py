@@ -150,11 +150,15 @@ def in_county(lat: float, lon: float) -> bool:
 class Hints:
     """What else the dispatch says about where it is, used to choose between
     streets with the same name ("Main Street" is in Carmel, Arcadia, Sheridan…)."""
-    anchors: list = field(default_factory=list)   # (lat, lon) of the dispatched departments' towns
+    anchors: list = field(default_factory=list)   # (lat, lon[, reach m]) of the dispatched departments' towns
     cross: list = field(default_factory=list)     # point lists of each cross street read out
 
     def anchor_dist(self, p) -> float:
-        return min((_dist_m(p, a) for a in self.anchors), default=0.0)
+        return min((_dist_m(p, a[:2]) for a in self.anchors), default=0.0)
+
+    def within_reach(self, p, default_m: float) -> bool:
+        return not self.anchors or any(_dist_m(p, a[:2]) <= (a[2] if len(a) > 2 and a[2] else default_m)
+                                       for a in self.anchors)
 
     def cross_dist(self, p) -> float:
         return sum(min(min(_dist_m(p, q) for q in pts), 5_000) for pts in self.cross) if self.cross else 0.0
@@ -165,7 +169,7 @@ class Hints:
 
     @property
     def near(self):
-        return self.anchors[0] if self.anchors else None
+        return tuple(self.anchors[0][:2]) if self.anchors else None
 
 
 # "cross of Stone Harbor Drive and Big Circle Drive", "Cross Off West 8th Street and West 9th Street"
@@ -547,6 +551,9 @@ class Gazetteer:
         rows = json.loads(self.path.read_text())
         self.places = [(n, la, lo, _place_tokens(n)) for n, la, lo in rows]
         self.by_name = {n.lower(): (la, lo) for n, la, lo, _ in self.places}
+        self.name_count = {}
+        for n, *_ in self.places:
+            self.name_count[n.lower()] = self.name_count.get(n.lower(), 0) + 1
         log.info(f"Place gazetteer: {len(self.places)} named places")
 
     def _fetch(self):
@@ -576,6 +583,16 @@ class Gazetteer:
             except Exception as e:
                 log.info(f"Overpass {url} unavailable ({e}); trying next")
         log.warning("Could not download place names; named places will use Nominatim only (retrying hourly)")
+
+    def is_unique(self, query: str, matched: str) -> bool:
+        """matched is the only place with that name and is clearly what was said
+        (not a chain store, not a loose fuzzy match)."""
+        if self.name_count.get(matched.lower(), 0) != 1:
+            return False
+        q = " ".join(_place_tokens(query))
+        if PLACE_ALIASES.get(q) == matched or PLACE_ALIASES.get(query.lower()) == matched:
+            return True
+        return difflib.SequenceMatcher(None, q, " ".join(_place_tokens(matched))).ratio() >= 0.85
 
     def find(self, query: str, near=None) -> GeoResult | None:
         if not self.places:
@@ -726,7 +743,7 @@ class Geocoder:
         anchors = list(anchors) or [c for c in [CITY_CENTERS.get((city_hint or "").lower())] if c]
         cross = [c for c in cross if c]
         key = (f"{(address or '').lower()}|{(place or '').lower()}|{(city_hint or '').lower()}|"
-               + ";".join(f"{a[0]:.3f},{a[1]:.3f}" for a in anchors) + "|" + ";".join(c.lower() for c in cross))
+               + ";".join(f"{a[0]:.3f},{a[1]:.3f}" + (f"/{a[2]:.0f}" if len(a) > 2 and a[2] else "") for a in anchors) + "|" + ";".join(c.lower() for c in cross))
         hit, cached = self._cached(key)
         if hit:
             return cached
@@ -735,12 +752,18 @@ class Geocoder:
         if res and res.precision == "street" and not self._plausible(res, hints):
             res = None      # a fuzzy street match outside the department's area: better unmapped than wrong
         if res and place and res.precision != "place":
-            # "12999 Pennsylvania St at Majestic Care": put the pin on the building
-            # when the named place is right there, not on the street centerline.
             p = self.places.find(place, (res.lat, res.lon))
             if p and _dist_m((p.lat, p.lon), (res.lat, res.lon)) < 400:
+                # "12999 Pennsylvania St at Majestic Care": put the pin on the building
+                # when the named place is right there, not on the street centerline.
                 res = GeoResult(p.lat, p.lon, "address" if res.precision == "address" else "place",
                                 res.matched, res.zip, f"{res.source}+osm")
+            else:
+                # "Sigma Phi Epsilon, 690 Washington Street" when it's on Waldron: a place
+                # with one location that clearly matches what was said beats a misheard street.
+                p = self.places.find(place, hints.near)
+                if p and self.places.is_unique(place, p.matched) and self._plausible(p, hints):
+                    res = p
         self._store(key, res)
         return res
 
@@ -752,8 +775,8 @@ class Geocoder:
         if hints.cross and hints.cross_dist(p) < 800 * len(hints.cross):
             return True                       # the cross streets read out are right there
         if hints.cross and hints.anchors:
-            return hints.anchor_dist(p) <= self.DISTRICT_M and hints.cross_dist(p) < 2_500 * len(hints.cross)
-        return not hints.anchors or hints.anchor_dist(p) <= self.DISTRICT_M
+            return hints.within_reach(p, self.DISTRICT_M) and hints.cross_dist(p) < 2_500 * len(hints.cross)
+        return hints.within_reach(p, self.DISTRICT_M)
 
     def _geocode(self, address, place, city_hint, hints: Hints, cross: list[str]) -> GeoResult | None:
         near = hints.near
