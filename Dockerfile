@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# ── Stage 1: download models and county data (runs natively on the build host;
+# ── Stage 1: download models and street/place data for every county profile (runs natively on the build host;
 #    the results are architecture-independent) ──────────────────────────────
 FROM --platform=$BUILDPLATFORM python:3.12-slim AS bundle
 WORKDIR /src
@@ -22,6 +22,7 @@ COPY dispatch/ dispatch/
 COPY web/ web/
 
 ENV DATA_DIR=/data \
+    COUNTY=tippecanoe \
     BUNDLE_DIR=/opt/bundle \
     WHISPER_MODEL=small.en \
     OLLAMA_URL=http://ollama:11434 \

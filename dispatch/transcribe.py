@@ -14,16 +14,11 @@ from . import config
 
 log = logging.getLogger(__name__)
 
-# Biases Whisper toward local vocabulary. Keep it under ~200 tokens.
-PROMPT = (
-    "Tippecanoe County fire and EMS dispatch, Lafayette and West Lafayette, Indiana. "
-    "Station 1, Engine 1502, Medic 5, Westside Medic, Central Medic, Battalion 14, Ladder 12. "
-    "Medical run, stand by for dispatch, go channel 2, time out 1110. "
-    "North Salisbury Street, Sagamore Parkway, Teal Road, Creasy Lane, Greenbush Street, "
-    "Kossuth Street, Concord Road, McCarty Lane, Yeager Road, Klondike Road, Northwestern Avenue, "
-    "Cumberland Avenue, Stadium Avenue, State Street, South 18th Street, County Road 500 East. "
-    "Westminster Village, LTHC, IU Health Arnett, Franciscan, Purdue."
-)
+# Biases Whisper toward local vocabulary (department names, streets). It comes
+# from the county profile; keep it under ~200 tokens.
+PROMPT = config.PROFILE.whisper_prompt
+# Department names Whisper should prefer when the audio is ambiguous.
+HOTWORDS = " ".join(dict.fromkeys(d.spoken or d.name for d in config.PROFILE.departments))
 
 _model = None
 _lock = threading.Lock()
@@ -49,6 +44,6 @@ def transcribe(path: str) -> str:
         model = _get_model()
         segments, _ = model.transcribe(
             path, language="en", beam_size=config.WHISPER_BEAM, vad_filter=True,
-            initial_prompt=PROMPT, condition_on_previous_text=False,
+            initial_prompt=PROMPT, hotwords=HOTWORDS, condition_on_previous_text=False,
         )
         return " ".join(s.text.strip() for s in segments).strip()

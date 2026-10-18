@@ -15,8 +15,8 @@ import time
 
 import requests
 
-from . import config
-from .taxonomy import ALL_NATURES, category_for, nature_from_keywords
+from . import config, departments
+from .taxonomy import ALL_NATURES, NATURE_GUIDE, category_for, nature_from_keywords, reconcile_fire_alarm
 
 log = logging.getLogger(__name__)
 
@@ -40,11 +40,16 @@ SCHEMA = {
     "required": ["is_dispatch", "address", "place", "nature", "units", "patient_age", "patient_sex", "summary"],
 }
 
-SYSTEM_PROMPT = f"""You read speech-to-text transcripts of fire/EMS radio in Tippecanoe County, Indiana \
-(Lafayette, West Lafayette, Purdue University) and extract the incident being dispatched.
+_P = config.PROFILE
+_DEPTS = ", ".join(d.spoken or d.name for d in _P.departments)
+_GUIDE = "\n".join(f"  - {n}: {g}" for n, g in NATURE_GUIDE.items())
+
+SYSTEM_PROMPT = f"""You read speech-to-text transcripts of fire/EMS radio in {_P.name}, {_P.state} \
+and extract the incident being dispatched.
 
 Transcripts are noisy: words are misheard, and dispatchers usually repeat the address. \
-Units are called by station or number ("Station 3", "Engine 1502", "Medic 5", "Westside Medic", "Central").
+Departments toned out by name in this county: {_DEPTS}. \
+Units are called by station or number ({_P.unit_examples}).
 
 Fields:
 - is_dispatch: true ONLY if the dispatcher is sending units to a new incident at a location. \
@@ -52,19 +57,27 @@ false for acknowledgements, en route / on scene / clearing reports, status check
 and anything without an incident location.
 - address: the street address as spoken, house number first, without apartment/room/city \
 ("2741 North Salisbury Street"). For an intersection use "Street A and Street B". \
-Fix obvious mishearing of local street names (Sagamore Parkway, Salisbury, Teal Road, Creasy Lane, \
-Greenbush, Union, Kossuth, Concord Road, McCarty Lane, Yeager Road, Klondike Road, Cumberland Avenue, \
-Northwestern Avenue, Stadium Avenue, State Street, River Road). null if none.
-- place: a named business/facility/landmark if given ("Westminster Village", "Central Presbyterian Church", \
-"Purdue Police Department", "LTHC"), else null.
-- nature: the single best match from the allowed list. Use "Other" only if none fits.
-- units: unit or station names being dispatched, e.g. ["Station 7", "Medic 5"].
+Fix obvious mishearing of local street names ({_P.street_hints}). null if none.
+- place: a named business/facility/landmark if given ({_P.place_examples}), else null.
+- nature: the single best match from the allowed list, judged from the complaint or what was reported. \
+Use the most specific type; "Other Medical" and "Other" are last resorts. An alarm or detector going off is \
+an alarm call, never a fire, unless the caller reports actual fire or smoke.
+- units: numbered apparatus or stations being dispatched, e.g. ["Station 7", "Medic 5", "Engine 924"]. \
+Department or agency names ({_DEPTS}) are NOT units.
 - patient_age / patient_sex: if stated.
 - summary: one short plain sentence describing the incident (max 15 words), no address.
+
+How to tell easily confused types apart:
+{_GUIDE}
 
 Allowed natures: {", ".join(ALL_NATURES)}."""
 
 EXAMPLES = [
+    ("TEAS, Buck Creek Fire, TEAS, Buck Creek Fire, be en route 5585 North 900 East, 5585 North 900 East, "
+     "smoke detector going off in the barn, no smoke or fire seen, tone time 0705.",
+     {"is_dispatch": True, "address": "5585 North 900 East", "place": None, "nature": "Fire Alarm",
+      "units": [], "patient_age": None, "patient_sex": None,
+      "summary": "Smoke detector sounding in barn, no fire seen."}),
     ("Station 7, stand by for a medical run, the 3106 Eagles Way Drive, Apartment 1309. Station 7, 3106 Eagles "
      "Way Drive. I have a 73-year-old male who fell in the bathroom, he's now stuck between the wall and the "
      "shower chair. Go channel 7.",
@@ -230,8 +243,28 @@ def extract(transcript: str, use_llm: bool = True) -> tuple[dict, str]:
         return dict(EMPTY), "skipped"
     if use_llm and config.LLM_ENABLED:
         out = llm_extract(transcript)   # LLMUnavailable propagates so the worker can retry later
-        return ground(out, transcript), "llm"
-    return rules_extract(transcript), "rules"
+        return refine(ground(out, transcript), transcript), "llm"
+    return refine(rules_extract(transcript), transcript), "rules"
+
+
+_BEATS_SICK_PERSON = {"Stroke", "Seizure", "Medical Alarm", "Lift Assist", "Choking", "Cardiac Arrest",
+                      "Heart Problem / Blood Pressure", "Unknown Problem / Person Down"}
+
+
+def refine(out: dict, transcript: str) -> dict:
+    """Deterministic corrections on top of the model's call type and units."""
+    nature = reconcile_fire_alarm(out["nature"], transcript)
+    kw = nature_from_keywords(transcript)
+    med = nature_from_keywords(transcript, "Medical")
+    if nature == "Other" and kw:
+        nature = kw                       # the words name something specific
+    elif nature == "Other Medical" and med:
+        nature = med
+    elif nature == "Sick Person" and med in _BEATS_SICK_PERSON:
+        nature = med                      # "speech issues, weak" is a stroke workup, not just sick
+    out["nature"] = nature if nature in ALL_NATURES else "Other"
+    out["units"] = list(dict.fromkeys(u for u in map(departments.clean_unit, out["units"]) if u))
+    return out
 
 
 _SPOKEN_DIGITS = {"zero": "0", "oh": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",

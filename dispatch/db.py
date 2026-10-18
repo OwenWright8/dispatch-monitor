@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS transmissions (
     url          TEXT,
     status       TEXT NOT NULL DEFAULT 'pending',  -- pending|done|short|error
     attempts     INTEGER NOT NULL DEFAULT 0,
-    transcript   TEXT,
+    transcript   TEXT,                      -- with misheard names fixed (what the LLM read)
     method       TEXT,                      -- llm|rules|skipped
     extracted    TEXT,                      -- JSON
     is_dispatch  INTEGER,
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS incidents (
     zip          TEXT,
     category     TEXT NOT NULL,
     nature       TEXT NOT NULL,
-    agencies     TEXT NOT NULL DEFAULT '[]',
+    agencies     TEXT NOT NULL DEFAULT '[]',  -- departments dispatched ("TEAS", "Wea Township Fire")
     units        TEXT NOT NULL DEFAULT '[]',
     patient_age  INTEGER,
     patient_sex  TEXT,
@@ -78,8 +78,19 @@ def conn() -> sqlite3.Connection:
     return c
 
 
+# Columns added after the first release: (table, column, type)
+MIGRATIONS = [
+    ("transmissions", "transcript_raw", "TEXT"),   # Whisper output before name fixes
+]
+
+
 def init():
-    conn().executescript(SCHEMA)
+    c = conn()
+    c.executescript(SCHEMA)
+    for table, col, typ in MIGRATIONS:
+        cols = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+        if col not in cols:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
 
 
 def get_state(key: str, default=None):

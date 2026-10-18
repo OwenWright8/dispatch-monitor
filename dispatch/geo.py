@@ -1,4 +1,4 @@
-"""Geocoding for Tippecanoe County.
+"""Geocoding for the configured county (see dispatch/counties/).
 
 Primary: a local geocoder built from the Census TIGER/Line road network for the
 county (street names incl. alternates, house-number ranges, ZIPs, and node ids).
@@ -34,18 +34,18 @@ log = logging.getLogger(__name__)
 
 S, W, N, E = config.COUNTY_BBOX
 
-CITY_CENTERS = {
-    "lafayette": (40.4167, -86.8753),
-    "west lafayette": (40.4259, -86.9081),
-    "purdue": (40.4237, -86.9212),
-    "battle ground": (40.5089, -86.8417),
-    "dayton": (40.3745, -86.7689),
-    "otterbein": (40.4906, -87.0961),
-    "clarks hill": (40.2464, -86.7253),
-    "romney": (40.2495, -86.9050),
-    "west point": (40.3459, -87.0458),
-    "shadeland": (40.3734, -86.9489),
-}
+CITY_CENTERS = config.PROFILE.city_centers
+STATE_NAMES = {"IN": "Indiana"}
+STATE_NAME = STATE_NAMES.get(config.STATE, config.STATE)
+
+
+def index_name() -> str:
+    """Street index file for this county (several counties can share a bundle)."""
+    return f"index-{config.COUNTY_FIPS}-{config.TIGER_YEAR}.pkl"
+
+
+def places_name() -> str:
+    return f"places-{config.COUNTY_FIPS}.json"
 
 DIRS = {
     "north": "n", "n": "n", "south": "s", "s": "s", "east": "e", "e": "e", "west": "w", "w": "w",
@@ -177,7 +177,7 @@ class TigerIndex:
     # ── construction ────────────────────────────────────────────────────
     @classmethod
     def load(cls, tiger_dir: Path) -> "TigerIndex | None":
-        cache = tiger_dir / f"index-{config.TIGER_YEAR}.pkl"
+        cache = tiger_dir / index_name()
         _seed_from_bundle(f"tiger/{cache.name}", cache)
         if cache.exists():
             try:
@@ -403,20 +403,7 @@ OVERPASS_URLS = [
 ]
 
 # How dispatchers actually say some places -> the OSM name
-PLACE_ALIASES = {
-    "corec": "France A. Córdova Recreational Sports Center",
-    "co rec": "France A. Córdova Recreational Sports Center",
-    "cordova": "France A. Córdova Recreational Sports Center",
-    "pupd": "Purdue Police Department",
-    "purdue police": "Purdue Police Department",
-    "purdue university police department": "Purdue Police Department",
-    "pmu": "Purdue Memorial Union",
-    "memorial union": "Purdue Memorial Union",
-    "lthc": "LTHC Homeless Services",
-    "ross ade": "Ross-Ade Stadium",
-    "mackey": "Mackey Arena",
-    "mackey arena": "Mackey Arena",
-}
+PLACE_ALIASES = config.PROFILE.place_aliases
 
 # Words that describe a kind of place rather than name it
 _GENERIC = {"the", "of", "at", "and", "residence", "hall", "center", "centre", "building", "bldg", "recreational",
@@ -438,7 +425,7 @@ class Gazetteer:
 
     def __init__(self, path: Path):
         self.path = path
-        _seed_from_bundle("places.json", path)
+        _seed_from_bundle(path.name, path)
         self.places: list[tuple[str, float, float, list[str]]] = []   # name, lat, lon, tokens
         self.by_name: dict[str, tuple[float, float]] = {}
         self._last_try = 0.0
@@ -594,8 +581,8 @@ def clean_address(addr: str) -> str:
     if re.match(r"^\d+\s+\S", a):
         a = a.split(",")[0]                               # ", 1309" / ", LTHC" after the street
     # Trailing ", West Lafayette, IN 47906" (only after a comma, so "Lafayette Ave" survives)
-    a = re.sub(r",\s*(?:west lafayette|lafayette|battle ground|dayton|otterbein|clarks hill|romney|"
-               r"west point|shadeland|indiana|in)\b.*$", "", a, flags=re.I).strip(" ,")
+    a = re.sub(rf",\s*(?:{config.PROFILE.city_regex}|{STATE_NAME}|{config.STATE})\b.*$", "", a,
+               flags=re.I).strip(" ,")
     # "three six three three Regal Valley" -> "3633 Regal Valley"
     toks = a.split()
     digits = []
@@ -611,7 +598,7 @@ class Geocoder:
     def __init__(self, conn_factory):
         self._conn = conn_factory
         self.tiger = TigerIndex.load(config.DATA_DIR / "tiger")
-        self.places = Gazetteer(config.DATA_DIR / "places.json")
+        self.places = Gazetteer(config.DATA_DIR / places_name())
 
     def _cached(self, key: str):
         row = self._conn().execute("SELECT result FROM geocache WHERE key=?", (key,)).fetchone()
@@ -644,7 +631,7 @@ class Geocoder:
                     r = self.tiger.address(number, street, near)
                     if r and r.precision == "address":
                         return r
-                r2 = census_geocode(f"{number} {street}, {city_hint}, IN")
+                r2 = census_geocode(f"{number} {street}, {city_hint}, {config.STATE}")
                 if r2:
                     return r2
                 if r:      # right street, number off its known ranges
@@ -667,12 +654,12 @@ class Geocoder:
             r = self.places.find(place, near)
             if r:
                 return r
-            for q in (f"{place}, {city_hint}, Indiana", place):
+            for q in (f"{place}, {city_hint}, {STATE_NAME}", place):
                 r = nominatim(q)
                 if r:
                     return r
         if address:
-            r = nominatim(f"{clean_address(address)}, {city_hint}, Indiana")
+            r = nominatim(f"{clean_address(address)}, {city_hint}, {STATE_NAME}")
             if r:
                 return r
             if self.tiger:   # last resort: just the street

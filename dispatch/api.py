@@ -28,7 +28,7 @@ from .taxonomy import CATEGORIES, TAXONOMY
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
-app = FastAPI(title="Tippecanoe Dispatch Monitor", docs_url="/api/docs")
+app = FastAPI(title=config.PROFILE.title, docs_url="/api/docs")
 app.mount("/lib", StaticFiles(directory=WEB_DIR / "lib"), name="lib")
 
 
@@ -94,8 +94,18 @@ def _incident(row) -> dict:
 # ─────────────────────────────────────────────
 @app.get("/api/meta")
 def meta():
+    p = config.PROFILE
+    seen = set()
+    for (ags,) in db.conn().execute("SELECT DISTINCT agencies FROM incidents"):
+        seen.update(json.loads(ags))
+    depts = [{"name": d.name, "kind": d.kind, "area": d.area} for d in p.departments]
+    known = {d["name"] for d in depts}
+    depts += [{"name": a, "kind": "other", "area": ""} for a in sorted(seen - known)]
     return {"categories": CATEGORIES, "taxonomy": TAXONOMY,
-            "agencies": sorted({ch.agency for ch in config.CHANNELS.values()}),
+            "county": {"key": p.key, "name": p.name, "state": p.state, "title": p.title, "subtitle": p.subtitle,
+                       "center": p.center, "zoom": p.zoom, "bbox": p.bbox},
+            "departments": depts,
+            "agencies": [d["name"] for d in depts],
             "channels": [{"talkgroup": ch.talkgroup, "agency": ch.agency} for ch in config.CHANNELS.values()],
             "carto_key": config.CARTO_API_KEY or None}
 
@@ -147,7 +157,7 @@ def incident(inc_id: int):
         raise HTTPException(404)
     d = _incident(row)
     d["transmissions"] = [dict(t) for t in c.execute(
-        "SELECT id, agency, talkgroup, time_ms, len_s, transcript FROM transmissions WHERE incident_id=? "
+        "SELECT id, agency, talkgroup, time_ms, len_s, transcript, transcript_raw FROM transmissions WHERE incident_id=? "
         "ORDER BY time_ms", (inc_id,)).fetchall()]
     if d["matched"]:
         d["history"] = [dict(r) for r in c.execute(
