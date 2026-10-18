@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 
 import requests
 
@@ -89,18 +90,26 @@ class LLMUnavailable(Exception):
     pass
 
 
-def ensure_model() -> bool:
-    """Pull the configured model if this Ollama doesn't have it (fresh container)."""
-    try:
-        tags = requests.get(f"{config.OLLAMA_URL}/api/tags", timeout=10).json().get("models", [])
-    except Exception as e:
-        log.warning(f"Ollama not reachable at {config.OLLAMA_URL} ({e}); will use keyword rules until it is")
-        return False
+def ensure_model(wait_s: int = 0, on_status=None) -> bool:
+    """Pull the configured model if this Ollama doesn't have it (fresh container).
+    Waits up to wait_s for the Ollama server to come up first."""
+    deadline = time.time() + wait_s
+    while True:
+        try:
+            tags = requests.get(f"{config.OLLAMA_URL}/api/tags", timeout=10).json().get("models", [])
+            break
+        except Exception as e:
+            if time.time() >= deadline:
+                log.warning(f"Ollama not reachable at {config.OLLAMA_URL} ({e}); using keyword rules until it is")
+                return False
+            time.sleep(5)
     names = {m.get("name") for m in tags} | {m.get("model") for m in tags}
     want = config.OLLAMA_MODEL if ":" in config.OLLAMA_MODEL else f"{config.OLLAMA_MODEL}:latest"
     if want in names:
         return True
-    log.info(f"Pulling {config.OLLAMA_MODEL} into Ollama (one-time, a few GB)…")
+    log.info(f"Downloading {config.OLLAMA_MODEL} into Ollama (one-time, a few GB)…")
+    if on_status:
+        on_status(f"Downloading AI model {config.OLLAMA_MODEL} (first start only)")
     try:
         r = requests.post(f"{config.OLLAMA_URL}/api/pull", json={"model": config.OLLAMA_MODEL, "stream": False},
                           timeout=3600)
@@ -118,7 +127,7 @@ def llm_extract(transcript: str) -> dict:
         "messages": _messages(transcript),
         "stream": False,
         "format": SCHEMA,
-        "keep_alive": "30m",
+        "keep_alive": "24h",
         "options": {"temperature": 0, "num_predict": 220, "num_ctx": 4096},
     }
     try:

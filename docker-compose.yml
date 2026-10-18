@@ -1,12 +1,16 @@
-# Mac mini:  run Ollama natively (it uses the GPU), then `docker compose up -d`
-# NAS:       set COMPOSE_PROFILES=ollama and OLLAMA_URL=http://ollama:11434 in .env
-#            (runs Ollama in a container on the CPU), then `docker compose up -d`
+# Tippecanoe Dispatch Monitor — the whole stack in one file.
+#
+#   docker compose up -d        then open http://<this machine>:8086
+#
+# Both images are prebuilt on GitHub with the speech model, AI model and county
+# map data inside, so it starts working as soon as the images are pulled
+# (~7 GB the first time). Optional settings go in a .env file next to this one
+# (see .env.example) — none are required.
 services:
 
   app:
-    image: ghcr.io/${GHCR_OWNER:-owenwright8}/dispatch-monitor:latest
-    # To build from source instead, uncomment:
-    # build: .
+    image: ghcr.io/owenwright8/dispatch-monitor:latest
+    # build: .                  # uncomment to build from source instead
     restart: unless-stopped
     ports:
       - "${WEB_PORT:-8086}:8080"
@@ -14,24 +18,25 @@ services:
       - path: .env
         required: false
     environment:
-      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b}
-      - WHISPER_MODEL=${WHISPER_MODEL:-small.en}
-      - BACKFILL_HOURS=${BACKFILL_HOURS:-24}
+      - OLLAMA_URL=http://ollama:11434
     volumes:
-      - dispatch-data:/data          # database, archived audio, street index, Whisper model
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - dispatch-data:/data     # database and saved audio clips
+    depends_on:
+      ollama:
+        condition: service_healthy
 
   ollama:
-    image: ollama/ollama:latest
-    profiles: ["ollama"]
+    image: ghcr.io/owenwright8/dispatch-monitor-ollama:latest   # Ollama + qwen2.5:7b
+    # build: { context: ., dockerfile: Dockerfile.ollama }
     restart: unless-stopped
     volumes:
-      - ollama-models:/root/.ollama
-    environment:
-      - OLLAMA_KEEP_ALIVE=30m
-      - OLLAMA_NUM_PARALLEL=1
+      - ollama-models:/root/.ollama   # seeded from the image; holds any other model you pick
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 10
 
 volumes:
   dispatch-data:

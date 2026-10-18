@@ -33,9 +33,12 @@ def _get_model():
     global _model
     if _model is None:
         from faster_whisper import WhisperModel
-        log.info(f"Loading Whisper model {config.WHISPER_MODEL} ({config.WHISPER_COMPUTE})")
+        bundled = config.BUNDLE_DIR / "whisper" / config.WHISPER_MODEL
+        model = str(bundled) if (bundled / "model.bin").exists() else config.WHISPER_MODEL
+        log.info(f"Loading Whisper model {config.WHISPER_MODEL} ({config.WHISPER_COMPUTE})"
+                 + (" from image" if model != config.WHISPER_MODEL else ""))
         _model = WhisperModel(
-            config.WHISPER_MODEL, device="cpu", compute_type=config.WHISPER_COMPUTE,
+            model, device="cpu", compute_type=config.WHISPER_COMPUTE,
             cpu_threads=config.WHISPER_THREADS, download_root=str(config.DATA_DIR / "models"),
         )
     return _model

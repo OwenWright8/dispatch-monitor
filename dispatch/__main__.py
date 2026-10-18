@@ -3,6 +3,7 @@
     python -m dispatch                 poll + transcribe + serve dashboard (default)
     python -m dispatch reprocess       rebuild incidents from stored transcripts
     python -m dispatch reprocess --rules   ...without the LLM
+    python -m dispatch prefetch --out DIR  download models/data into DIR (Docker build)
 """
 
 import argparse
@@ -14,7 +15,8 @@ from . import config, db, pipeline
 
 def main():
     ap = argparse.ArgumentParser(prog="dispatch")
-    ap.add_argument("command", nargs="?", default="run", choices=["run", "reprocess"])
+    ap.add_argument("command", nargs="?", default="run", choices=["run", "reprocess", "prefetch"])
+    ap.add_argument("--out", default="/opt/bundle", help="prefetch: output directory")
     ap.add_argument("--rules", action="store_true", help="reprocess with keyword rules only")
     ap.add_argument("--no-web", action="store_true", help="run the pipeline without the HTTP server")
     args = ap.parse_args()
@@ -23,6 +25,11 @@ def main():
     for noisy in ("httpx", "httpx2", "faster_whisper", "huggingface_hub"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     log = logging.getLogger("dispatch")
+    if args.command == "prefetch":
+        from . import prefetch
+        prefetch.run(args.out)
+        return
+
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     db.init()
 

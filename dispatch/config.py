@@ -49,6 +49,9 @@ DATA_DIR = Path(_env("DATA_DIR", "data"))
 DB_PATH = Path(_env("DB_PATH", str(DATA_DIR / "dispatch.db")))
 AUDIO_DIR = Path(_env("AUDIO_DIR", str(DATA_DIR / "audio")))
 KEEP_AUDIO = _bool("KEEP_AUDIO", True)          # archive dispatch audio locally
+# Read-only data baked into the Docker image at build time (Whisper model,
+# street index, place names) so a fresh install needs no first-run downloads.
+BUNDLE_DIR = Path(_env("BUNDLE_DIR", "/opt/bundle"))
 
 OPENMHZ_SYSTEM = _env("OPENMHZ_SYSTEM", "tippco")
 OPENMHZ_API = _env("OPENMHZ_API", "https://api.openmhz.com")
