@@ -615,6 +615,11 @@ function openCorrection(i, msg = "", err = false) {
       calls right: a corrected location is remembered for the address and place heard on this call, a
       corrected call type becomes an example for the AI, and word fixes apply to every new transcript.</div>
     <div class="set-row"><label class="name" for="cNature">Call type</label><select id="cNature">${natures}</select></div>
+    <div class="set-row"><label class="name" for="cUnits">Units</label>
+      <input type="text" id="cUnits" value="${esc(i.units.join(", "))}" placeholder="Engine 383, Medic 382">
+      <div class="help">Comma-separated. The departments follow the units unless you change them below. A unit
+        number no department uses yet is learned for this call's department. To fix a unit on every call
+        (always hear "Engine 33" as "Engine 383"), add it under Misheard words.</div></div>
     <div class="set-row"><label class="name" for="cAddress">Location</label>
       <input type="text" id="cAddress" value="${esc(PICKED ? PICKED.address : (i.matched || i.address || ""))}" placeholder="12950 Talblick St">
       <div class="help">Type the right address, or <button class="reset" id="pickOnMap">pick it on the map</button>.
@@ -664,6 +669,8 @@ async function saveCorrection() {
   const addr = document.getElementById("cAddress").value.trim();
   if (PICKED) { body.lat = PICKED.lat; body.lon = PICKED.lon; body.address = addr; }
   else if (addr && addr !== (i.matched || i.address || "")) body.address = addr;
+  const units = document.getElementById("cUnits").value.split(",").map(u => u.trim()).filter(Boolean);
+  if (JSON.stringify(units) !== JSON.stringify(i.units)) body.units = units;
   const depts = [...document.querySelectorAll("#cDepts input:checked")].map(x => x.value);
   if (JSON.stringify([...depts].sort()) !== JSON.stringify([...i.agencies].sort())) body.departments = depts;
   const fixes = [...document.querySelectorAll("#cWords > div")].map(r => ({
@@ -732,6 +739,9 @@ async function openSettings(msg = "", err = false) {
       ${L.word_fixes.length ? `<div class="set-row" style="display:block"><label class="name">Misheard words</label>
         ${L.word_fixes.map(w => `<div style="display:flex;gap:8px;font-size:13px;padding:2px 0">"${esc(w.heard)}" → "${esc(w.actual)}"
           <button class="reset" data-forget="word" data-key="${esc(w.heard)}">remove</button></div>`).join("")}</div>` : ""}
+      ${(L.unit_owners || []).length ? `<div class="set-row" style="display:block"><label class="name">Unit numbers</label>
+        ${L.unit_owners.map(u => `<div style="display:flex;gap:8px;font-size:13px;padding:2px 0">${esc(u.number)} → ${esc(u.dept)}
+          <button class="reset" data-forget="unit" data-key="${esc(u.number)}">remove</button></div>`).join("")}</div>` : ""}
       ${L.locations.length ? `<div class="set-row" style="display:block"><label class="name">Corrected locations</label>
         ${L.locations.map(l => `<div style="display:flex;gap:8px;font-size:13px;padding:2px 0">${esc(l.name.replace(/^addr:/, ""))}
           <span style="color:var(--muted)">(${esc(l.dept)})</span> → ${esc(l.matched || "")}

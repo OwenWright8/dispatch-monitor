@@ -27,7 +27,7 @@ from .taxonomy import ALL_NATURES, category_for
 
 MANUAL = 1_000_000          # learned_places.n for locations a person set (never overridden automatically)
 
-_cache: dict = {"at": 0.0, "fixes": []}
+_cache: dict = {"at": 0.0, "fixes": [], "owners": {}}
 _lock = threading.Lock()
 
 
@@ -42,8 +42,17 @@ def word_fixes() -> list[tuple[re.Pattern, str]]:
             except Exception:
                 rows = []
             _cache["fixes"] = [(re.compile(r"(?<![\w])" + re.escape(h) + r"(?![\w])", re.I), a) for h, a in rows]
+            try:
+                _cache["owners"] = dict(db.conn().execute("SELECT number, dept FROM unit_owners").fetchall())
+            except Exception:
+                _cache["owners"] = {}
             _cache["at"] = time.time()
         return _cache["fixes"]
+
+
+def unit_owner(number: str) -> str | None:
+    word_fixes()                       # refreshes the cache
+    return _cache["owners"].get(number)
 
 
 def apply_word_fixes(text: str) -> str:
@@ -90,7 +99,7 @@ def addr_key(address: str | None) -> str:
 
 def correct(inc_id: int, body: dict) -> list[str]:
     """Apply a correction from the dashboard. Returns the fields changed.
-    body: {nature, address, lat, lon, departments, word_fixes: [{heard, actual}]}"""
+    body: {nature, units, address, lat, lon, departments, word_fixes: [{heard, actual}]}"""
     from . import pipeline
     c = db.conn()
     row = c.execute("SELECT * FROM incidents WHERE id=?", (inc_id,)).fetchone()
@@ -130,12 +139,28 @@ def correct(inc_id: int, body: dict) -> list[str]:
                                                json.dumps(keep), now))
         _record(c, tx_ids, "nature", nature, now)
 
+    units = None
+    if body.get("units") is not None:
+        units = list(dict.fromkeys(u.strip() for u in body["units"] if isinstance(u, str) and u.strip()))
+        changed.append("units")
+        _record(c, tx_ids, "units", units, now)
+
+    depts = None
     if body.get("departments") is not None:
         depts = [d for d in body["departments"] if isinstance(d, str) and d.strip()]
         if not depts:
             raise ValueError("Pick at least one department")
+    elif units:
+        # the departments follow the corrected units ("Engine 383" is Westfield, not White River)
+        from . import departments as dep
+        from .config import Channel
+        found = dep.detect(" ".join(units), units, Channel(0, "", "", None, True))
+        depts = found or None
+    if depts and sorted(depts) != sorted(json.loads(row["agencies"])):
         changed.append("departments")
         _record(c, tx_ids, "departments", depts, now)
+    if units and depts:
+        _learn_unit_owners(c, units, depts, now)
 
     loc = None
     if body.get("lat") is not None and body.get("lon") is not None:
@@ -161,6 +186,20 @@ def correct(inc_id: int, body: dict) -> list[str]:
     if changed:
         apply_to_incident(inc_id)
     return changed
+
+
+def _learn_unit_owners(c, units, depts, now):
+    """A corrected unit whose number no department's pattern covers, on a call with a single
+    department, belongs to that department from now on ("Battalion 304" -> Carmel Fire)."""
+    from . import departments as dep
+    if len(depts) != 1:
+        return
+    for u in units:
+        m = re.search(r"(\d{3,4})\b", u)
+        if m and not dep._by_unit_number(m.group(1)):
+            c.execute("INSERT OR REPLACE INTO unit_owners(number, dept, created_ms) VALUES (?,?,?)",
+                      (m.group(1), depts[0], now))
+            _cache["at"] = 0.0
 
 
 def _record(c, tx_ids, field, value, now):
@@ -210,6 +249,8 @@ def apply_to_incident(inc_id: int):
         upd.update(nature=fields["nature"], category=category_for(fields["nature"]))
     if "departments" in fields:
         upd["agencies"] = json.dumps(fields["departments"])
+    if "units" in fields:
+        upd["units"] = json.dumps(fields["units"])
     if "location" in fields:
         loc = fields["location"]
         upd.update(lat=loc["lat"], lon=loc["lon"], matched=loc["matched"], precision=loc["precision"],
@@ -242,6 +283,7 @@ def learned() -> dict:
         "locations": [dict(r) for r in c.execute(
             "SELECT name, dept, matched, updated_ms FROM learned_places WHERE n >= ? ORDER BY updated_ms DESC",
             (MANUAL,))],
+        "unit_owners": [dict(r) for r in c.execute("SELECT number, dept, created_ms FROM unit_owners ORDER BY number")],
         "call_types": c.execute("SELECT COUNT(*) FROM corrections WHERE field='nature' AND transcript IS NOT NULL"
                                 ).fetchone()[0],
     }
@@ -252,8 +294,11 @@ def forget(kind: str, key: str, dept: str | None = None) -> bool:
     if kind == "word":
         n = c.execute("DELETE FROM word_fixes WHERE heard=?", (key,)).rowcount
         _cache["at"] = 0.0
+    elif kind == "unit":
+        n = c.execute("DELETE FROM unit_owners WHERE number=?", (key,)).rowcount
+        _cache["at"] = 0.0
     elif kind == "location":
         n = c.execute("DELETE FROM learned_places WHERE name=? AND dept=? AND n >= ?", (key, dept, MANUAL)).rowcount
     else:
-        raise ValueError("kind must be word or location")
+        raise ValueError("kind must be word, unit or location")
     return bool(n)

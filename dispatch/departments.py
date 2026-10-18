@@ -104,7 +104,12 @@ _BARE_NUM = re.compile(r"^\D*?(\d{2,4})\D*$")
 
 
 def _by_unit_number(num: str) -> Department | None:
-    """'1305' -> the department whose pattern ('13xx') fits; the most specific pattern wins."""
+    """'1305' -> the department whose pattern ('13xx') fits; the most specific pattern wins.
+    A unit a correction in the dashboard assigned to a department wins over the patterns."""
+    from .corrections import unit_owner
+    owner = unit_owner(num)
+    if owner:
+        return config.PROFILE.department(owner) or Department(owner)
     best = None
     for d in config.PROFILE.departments:
         for pat in d.unit_prefixes:
