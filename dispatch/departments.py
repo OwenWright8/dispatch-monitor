@@ -44,7 +44,8 @@ def normalize(transcript: str) -> str:
     if not transcript:
         return transcript
     fixes, names, _ = _compiled()
-    t = transcript
+    from .corrections import apply_word_fixes
+    t = apply_word_fixes(transcript)            # "heard -> actually" fixes added in the dashboard
     for _ in range(2):       # second pass: "T.E.'s about to go on fire" only reads as TEAS once Battle Ground is fixed
         for rx, d in names:
             if d.spoken:

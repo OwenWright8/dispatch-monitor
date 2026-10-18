@@ -787,11 +787,11 @@ class Geocoder:
         res = self._geocode(address, place, city_hint or config.PROFILE.name, hints, cross)
         if res and res.precision == "street" and not self._plausible(res, hints):
             res = None      # a fuzzy street match outside the department's area: better unmapped than wrong
-        if known and (res is None or res.precision == "street"
+        if known and (known.source == "manual" or res is None or res.precision == "street"
                       or self._confidence(res, hints) in ("approximate", "doubtful")):
             # The address failed or doesn't fit the call, but this place was placed
             # confidently on an earlier call for the same department.
-            res = GeoResult(known.lat, known.lon, "place", known.matched, known.zip, "learned")
+            res = GeoResult(known.lat, known.lon, "place", known.matched, known.zip, known.source)
         elif res and place and res.precision != "place":
             p = self.places.find(place, (res.lat, res.lon))
             if p and _dist_m((p.lat, p.lon), (res.lat, res.lon)) < 400:
