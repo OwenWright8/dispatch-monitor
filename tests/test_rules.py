@@ -107,3 +107,12 @@ def test_hints_rank_cross_streets_before_town():
     near_cross = (40.0, -86.0)
     h = Hints(anchors=[(40.2, -86.2)], cross=[[(40.0, -86.0001)]])
     assert h.rank(near_cross) < h.rank((40.2, -86.2))
+
+
+def test_both_address_readings_found():
+    r = extract.address_readings("Battalion 304, Engine 341, 1455 James Dean Drive on a high life alarm. "
+                                 "Battalion 304, Engine 341, 1465 James Dean Drive on a life alarm, 948.")
+    assert set(r) == {"1455 James Dean Drive", "1465 James Dean Drive"}
+    assert r[0] == "1465 James Dean Drive"            # equal counts: the later readback first
+    r = extract.address_readings("Engine 374, 18623 Wood Place. Engine 374, 18623 Wood Place, 1720.")
+    assert r == ["18623 Wood Place"]

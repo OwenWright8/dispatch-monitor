@@ -358,6 +358,17 @@ def handle_transcript(tx, transcript: str, use_llm: bool = True) -> tuple[dict, 
         known = known_place(fields["place"], fields["departments"], fields["address"])
         geo = geocoder().geocode(fields["address"], fields["place"], city, anchors, fields["cross_streets"],
                                  known=known)
+        # The address is read out twice; if Whisper heard the readings differently, try
+        # each and keep the one that places best ("1455" vs "1465 James Dean Drive").
+        readings = [a for a in extract.address_readings(transcript)
+                    if a.lower() != (fields["address"] or "").lower()]
+        if readings and not (geo and geo.precision == "address" and geo.confidence == "confirmed"):
+            for alt in readings[:3]:
+                g = geocoder().geocode(alt, fields["place"], city, anchors, fields["cross_streets"],
+                                       known=known_place(fields["place"], fields["departments"], alt))
+                if g and (geo is None or _better_location(g, _as_row(geo), fields["departments"])):
+                    geo, fields["address"] = g, alt
+        fields["address_readings"] = readings
     inc = attach(tx["time_ms"], fields["departments"], fields, geo, method)
     if inc:
         learn_place(inc)
@@ -558,7 +569,9 @@ def retry_locations(limit: int = 40) -> int:
                             "ORDER BY time_ms", (row["id"],)).fetchall():
             f = json.loads(tx["extracted"] or "{}")
             rules = extract.rules_extract(tx["transcript"] or "")
-            for a, p in ((f.get("address"), f.get("place")), (rules["address"], rules["place"] or f.get("place"))):
+            place = rules["place"] or f.get("place")
+            for a, p in [(f.get("address"), f.get("place")), (rules["address"], place)] + [
+                    (alt, place) for alt in extract.address_readings(tx["transcript"] or "")]:
                 if (a or p) and (a, p) not in cands:
                     cands.append((a, p))
             cross += [x for x in f.get("cross_streets") or [] if x not in cross]
