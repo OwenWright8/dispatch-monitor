@@ -1,18 +1,24 @@
-# Tippecanoe Dispatch Monitor
+# Dispatch Monitor
 
-Listens to Tippecanoe County fire/EMS dispatch radio (via [OpenMHz](https://openmhz.com/system/tippco)),
-transcribes each transmission, works out the address and type of emergency, pins it on a map, and
-keeps statistics on where calls happen, what kind, and when.
+Listens to a county's fire/EMS dispatch radio (via [OpenMHz](https://openmhz.com)), transcribes each
+transmission, works out the address, the type of emergency and which departments were sent, pins it on a
+map, and keeps statistics on where calls happen, what kind, and when.
 
-Monitored dispatch channels (configurable with `CHANNELS`):
+## Counties
 
-| Talkgroup | Channel | Agency |
-|---|---|---|
-| 1827 | TCFD DISPATCH | Tippecanoe County / township fire |
-| 1833 | TEAS EMS DISP | Tippecanoe EMS (ambulances) |
-| 1901 | LFD DISPATCH | Lafayette Fire |
-| 2021 | WLFD DISPATCH | West Lafayette Fire |
-| 2105 | PUFD DISPATCH | Purdue Fire |
+Each county is a profile in [`dispatch/counties/`](dispatch/counties/). Pick one with `COUNTY=` in `.env`:
+
+| `COUNTY` | Area | OpenMHz system | Channels |
+|---|---|---|---|
+| `tippecanoe` (default) | Lafayette, West Lafayette, Purdue | [tippco](https://openmhz.com/system/tippco) | 1827 county/township fire, 1833 TEAS EMS, 1901 Lafayette FD, 2021 West Lafayette FD, 2105 Purdue FD |
+| `hamilton` | Carmel, Fishers, Noblesville, Westfield | [hamiltonco](https://openmhz.com/system/hamiltonco) | 29010 county fire dispatch, 29006 county fire control, 29155 Noblesville FD |
+
+A profile holds everything county-specific: the OpenMHz system and talkgroups; the departments with the
+ways Whisper mishears their names ("Tees" → TEAS, "we all fire" → Wea Fire) and the unit numbers they use
+(Tippecanoe 9xx = Buck Creek, Hamilton 34x = Carmel); local street and place names for the speech and AI
+models; and the map area. **Adding a county is one new file** — copy `hamilton.py`, change the values,
+and set `COUNTY=` to its file name. Run two counties side by side as two stacks with different
+`COUNTY` and `WEB_PORT` (each stack keeps its own database volume).
 
 ## How it works
 
@@ -21,8 +27,12 @@ OpenMHz API ──(curl_cffi, gets past Cloudflare)──► transmissions table
                                                          │ newest first
                                     faster-whisper small.en (speech → text)
                                                          │
+                       name fixes from the county profile ("T.E.'s" → TEAS, "Otterbun" → Otterbein)
+                                                         │
                          Ollama qwen2.5:7b, JSON-schema output (fallback: keyword rules)
                          → is it a dispatch? address, place, call type, units, patient
+                         → rule checks: an alarm is not a fire; "Other Medical" only as a last resort
+                         → departments: named in the tone-out, or by unit number on shared channels
                                                          │
           local TIGER/Line street index for the county (offline, fuzzy street names,
           house-number interpolation, intersections) → Census geocoder → Nominatim
@@ -37,9 +47,18 @@ Things worth knowing:
 - **One incident, many transmissions.** A medical call is usually dispatched on TEAS EMS *and* the
   fire department channel, and the dispatcher repeats it. These merge into one incident, so the
   statistics aren't double-counted.
-- **Fixed call-type taxonomy** (`dispatch/taxonomy.py`): about 45 natures ("Fall", "Chest Pain",
-  "Fire Alarm", "Crash with Injuries"…) in 8 categories. The LLM must pick one, which keeps the
-  statistics consistent.
+- **Fixed call-type taxonomy** (`dispatch/taxonomy.py`): about 55 natures ("Fall", "Stroke",
+  "Heart Problem / Blood Pressure", "Lift Assist", "Medical Alarm", "Fire Alarm", "Crash with Injuries"…)
+  in 8 categories. The LLM must pick one, which keeps the statistics consistent. Confusable types come
+  with definitions in the prompt, and rule checks then correct the common mistakes: an alarm or detector
+  going off with no reported fire is a **Fire Alarm**, never a Structure Fire, and "Other Medical" is
+  replaced by a specific type when the complaint names one (speech problems → Stroke, high blood
+  pressure → Heart Problem / Blood Pressure).
+- **Departments, not just channels.** The county fire channel tones out township departments by name
+  ("TEAS, Wea Fire…"), so each incident lists the actual departments sent — Wea Township Fire, Buck
+  Creek Fire, TEAS — instead of "county fire". Shared channels also map unit numbers to departments.
+- **Transcripts keep both versions.** The detail view shows the corrected transcript, with what Whisper
+  first heard one click away.
 - **Grounding.** Small models sometimes "correct" an address or invent a unit. The house number and
   street words must actually appear in the transcript, otherwise the regex-extracted address is used.
 - **Location precision** is recorded (`address`, `intersection`, `place`, `street`). The map draws
@@ -50,11 +69,13 @@ Things worth knowing:
 
 `http://<host>:8086/`
 
-- **Map**: heatmap or incident markers colored by category, plus a live feed. Click an incident for
-  its transcripts, audio, and earlier incidents at the same address.
+- **Map**: incident markers colored by category (calls from the last 15 minutes pulse and are marked
+  NEW in the feed) or a heatmap, plus a live feed with the departments sent. Click an incident for its
+  transcripts, audio, and earlier incidents at the same address.
 - **Statistics**: incidents per day, by category, top call types, a weekday × hour heatmap, hour of
-  day by category, repeat locations, by ZIP, and by agency.
-- Filters (time range, category, agency, search, weekday/hour, call type, "only map area") apply to
+  day by category, repeat locations, by ZIP, and by department.
+- The dashboard remembers your time range, map mode and department filter.
+- Filters (time range, category, department, search, weekday/hour, call type, "only map area") apply to
   everything at once. Click a chart bar or heatmap cell to filter by it. Pan the map with
   *Only map area* on to get statistics for any neighborhood.
 - **Export CSV** downloads the filtered incidents.
@@ -127,11 +148,13 @@ All settings are optional and go in `.env` (see `.env.example`):
 
 | Variable | Default | |
 |---|---|---|
+| `COUNTY` | `tippecanoe` | county profile in `dispatch/counties/` (`tippecanoe`, `hamilton`) |
+| `OLLAMA_URL` | `http://ollama:11434` | point at an Ollama installed on the host (e.g. `http://host.docker.internal:11434`) to use its GPU |
 | `OLLAMA_MODEL` | `qwen2.5:7b` | pulled automatically if missing |
 | `LLM_ENABLED` | `true` | `false` = keyword rules only, no Ollama |
 | `WHISPER_MODEL` | `small.en` | `base.en` / `small.en` / `medium.en` |
 | `BACKFILL_HOURS` | `24` | history to load in the background on first start; `0` = live only. More can be loaded from the dashboard. |
-| `CHANNELS` | the five above | `talkgroup:agency:city-hint,…` |
+| `CHANNELS` | the county profile's | `talkgroup:label:city-hint,…`; a label naming a department credits it |
 | `KEEP_AUDIO` | `true` | keep dispatch clips (about 100 KB each) in `/data/audio` |
 | `INCIDENT_WINDOW_MIN` | `20` | transmissions merge into one incident within this window |
 | `WEB_PORT` | `8086` | host port |

@@ -13,35 +13,44 @@ def _bool(name: str, default: bool) -> bool:
     return _env(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
 
 
+# Which county this install monitors: a profile in dispatch/counties/.
+from .counties import ChannelSpec, load as _load_profile
+
+PROFILE = _load_profile(_env("COUNTY", "tippecanoe"))
+
+
 @dataclass(frozen=True)
 class Channel:
     talkgroup: int
-    agency: str
+    agency: str                      # channel label shown on transmissions
     # City tried first when geocoding addresses heard on this channel.
     city_hint: str
+    default_department: str | None = None
+    shared: bool = False
 
 
-# Dispatch talkgroups on the OpenMHz "tippco" system. Only dispatch channels are
-# monitored by default: that is where addresses and call types are read out.
-# Format: talkgroup:agency:city hint
-DEFAULT_CHANNELS = ",".join([
-    "1827:Tippecanoe Fire:Lafayette",       # TCFD DISPATCH  - county/township fire
-    "1833:TEAS EMS:Lafayette",              # TEAS EMS DISP  - county ambulance service
-    "1901:Lafayette FD:Lafayette",          # LFD DISPATCH
-    "2021:West Lafayette FD:West Lafayette",  # WLFD DISPATCH
-    "2105:Purdue FD:West Lafayette",        # PUFD DISPATCH
-])
+def _from_spec(c: ChannelSpec) -> Channel:
+    return Channel(c.talkgroup, c.label, c.city_hint, c.default_department, c.shared)
 
 
 def _parse_channels(spec: str) -> dict[int, Channel]:
+    """CHANNELS=talkgroup:label:city hint,...  (overrides the profile's channels).
+    A label naming one of the profile's departments credits that department."""
     channels = {}
     for part in spec.split(","):
         part = part.strip()
         if not part:
             continue
         tg, _, rest = part.partition(":")
-        agency, _, city = rest.partition(":")
-        channels[int(tg)] = Channel(int(tg), agency or f"TG {tg}", city or "Lafayette")
+        label, _, city = rest.partition(":")
+        known = PROFILE.channel(int(tg))
+        if known and not label:
+            channels[int(tg)] = _from_spec(known)
+            continue
+        label = label or f"TG {tg}"
+        dept = known.default_department if known else (label if PROFILE.department(label) else None)
+        channels[int(tg)] = Channel(int(tg), label, city or (known.city_hint if known else PROFILE.name),
+                                    dept, known.shared if known else dept is None)
     return channels
 
 
@@ -53,9 +62,10 @@ KEEP_AUDIO = _bool("KEEP_AUDIO", True)          # archive dispatch audio locally
 # street index, place names) so a fresh install needs no first-run downloads.
 BUNDLE_DIR = Path(_env("BUNDLE_DIR", "/opt/bundle"))
 
-OPENMHZ_SYSTEM = _env("OPENMHZ_SYSTEM", "tippco")
+OPENMHZ_SYSTEM = _env("OPENMHZ_SYSTEM", PROFILE.openmhz_system)
 OPENMHZ_API = _env("OPENMHZ_API", "https://api.openmhz.com")
-CHANNELS = _parse_channels(_env("CHANNELS", DEFAULT_CHANNELS))
+CHANNELS = (_parse_channels(os.environ["CHANNELS"]) if os.environ.get("CHANNELS", "").strip()
+            else {c.talkgroup: _from_spec(c) for c in PROFILE.channels})
 POLL_INTERVAL_S = int(_env("POLL_INTERVAL_S", "20"))
 BACKFILL_HOURS = float(_env("BACKFILL_HOURS", "24"))   # history to pull on first start
 MIN_CALL_SECONDS = int(_env("MIN_CALL_SECONDS", "4"))  # shorter clips are acks/keyups
@@ -75,14 +85,14 @@ for _suffix in ("/api/generate", "/api/chat"):
 OLLAMA_MODEL = _env("OLLAMA_MODEL", "qwen2.5:7b")
 OLLAMA_TIMEOUT_S = int(_env("OLLAMA_TIMEOUT_S", "180"))
 
-TIMEZONE = _env("TZ_LOCAL", "America/Indiana/Indianapolis")
+TIMEZONE = _env("TZ_LOCAL", PROFILE.timezone)
 
-# Tippecanoe County, IN (FIPS 18157) with a little margin.
-COUNTY_FIPS = "18157"
-COUNTY_BBOX = (40.20, -87.11, 40.58, -86.68)   # south, west, north, east
+COUNTY_FIPS = PROFILE.fips
+COUNTY_BBOX = PROFILE.bbox                     # south, west, north, east (with a little margin)
+STATE = PROFILE.state
 TIGER_YEAR = _env("TIGER_YEAR", "2025")
 NOMINATIM_URL = _env("NOMINATIM_URL", "https://nominatim.openstreetmap.org")
-USER_AGENT = _env("USER_AGENT", "tippecanoe-dispatch-monitor/2.0 (self-hosted)")
+USER_AGENT = _env("USER_AGENT", f"{PROFILE.key}-dispatch-monitor/2.1 (self-hosted)")
 
 # Transmissions about the same address within this window form one incident.
 INCIDENT_WINDOW_MIN = int(_env("INCIDENT_WINDOW_MIN", "20"))
