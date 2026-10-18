@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import datetime
 
 from curl_cffi import requests as cr
@@ -39,11 +40,16 @@ def _filter() -> dict:
 
 def _get(path: str, **params) -> dict:
     url = f"{config.OPENMHZ_API}/{config.OPENMHZ_SYSTEM}{path}"
-    r = _session().get(url, params={**params, **_filter()}, timeout=20)
-    if r.status_code == 403 and "Just a moment" in r.text:
-        raise RuntimeError("OpenMHz Cloudflare challenge not bypassed (curl_cffi impersonation may need updating)")
-    r.raise_for_status()
-    return r.json()
+    # Cloudflare challenges the odd request even with impersonation; a fresh
+    # session after a short pause almost always gets through.
+    for attempt in range(4):
+        r = _session().get(url, params={**params, **_filter()}, timeout=20)
+        if not (r.status_code == 403 and "Just a moment" in r.text):
+            r.raise_for_status()
+            return r.json()
+        _local.s = None
+        time.sleep(3 + attempt * 5)
+    raise RuntimeError("OpenMHz Cloudflare challenge not bypassed (curl_cffi impersonation may need updating)")
 
 
 def to_ms(iso: str) -> int:
