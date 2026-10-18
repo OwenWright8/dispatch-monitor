@@ -65,6 +65,14 @@ CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);
 -- Places learned from earlier calls: "Independence Village" on a Fishers call was
 -- 12950 Talblick St, so the next Fishers call naming it can be placed even if the
 -- street is misheard. Keyed by department: Carmel has its own Independence Village.
+-- Corrections made in the dashboard (see corrections.py). Rows with a transcript
+-- are worked call-type examples for the LLM; rows without are the active fix
+-- for one field of one call, matched to its transmissions.
+CREATE TABLE IF NOT EXISTS corrections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, tx_ids TEXT NOT NULL, field TEXT NOT NULL, value TEXT,
+    transcript TEXT, extracted TEXT, created_ms INTEGER
+);
+CREATE TABLE IF NOT EXISTS word_fixes (heard TEXT PRIMARY KEY, actual TEXT NOT NULL, created_ms INTEGER);
 CREATE TABLE IF NOT EXISTS learned_places (
     name TEXT NOT NULL, dept TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL,
     matched TEXT, n INTEGER NOT NULL DEFAULT 1, updated_ms INTEGER,
@@ -91,6 +99,7 @@ MIGRATIONS = [
     ("transmissions", "transcript_raw", "TEXT"),   # Whisper output before name fixes
     ("incidents", "confidence", "TEXT"),           # confirmed | high | approximate | doubtful
     ("incidents", "geo_tries", "INTEGER NOT NULL DEFAULT 0"),   # background location retries
+    ("incidents", "corrected", "TEXT NOT NULL DEFAULT ''"),     # fields fixed in the dashboard (locked)
 ]
 
 

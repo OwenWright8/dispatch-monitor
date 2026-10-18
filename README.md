@@ -163,6 +163,25 @@ summaries, patient age/sex, units) for 7 days; and the incident itself (call typ
 time) for 365 days, which is what the statistics use. `python -m dispatch reprocess` rebuilds only the
 incidents that still have transcripts.
 
+## Corrections (teach it)
+
+Open any incident and click **Something wrong? Correct it** to fix:
+- the call type
+- the location (type the right address or **pick it on the map**)
+- the departments sent
+- misheard words, e.g. heard "Tablix", should be "Talblick"
+
+The fix shows right away and is locked, so later transmissions, retries and `reprocess` won't undo it. The
+app also learns from it:
+
+- **Locations:** the corrected spot is remembered for the address and place name heard on that call, per
+  department. The next call with the same (mis)heard address goes straight there.
+- **Call types:** corrected calls become worked examples the AI sees for similar transcripts.
+- **Misheard words:** applied to every new transcript before anything else reads it.
+
+Settings lists what it has learned, with **remove** for anything that turns out wrong. Saving needs
+`ADMIN_PASSWORD` when one is set.
+
 ## Versions
 
 Releases are tagged `vMAJOR.MINOR.PATCH` and listed on the GitHub *Releases* page with what changed. Each

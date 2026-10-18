@@ -560,7 +560,7 @@ async function openIncident(id, fly) {
   const patient = [i.patient_age ? `${i.patient_age} y/o` : "", i.patient_sex || ""].filter(Boolean).join(" ");
   document.getElementById("modalBody").innerHTML = `
     <button class="x" aria-label="Close">×</button>
-    <h3><span class="sw" style="background:${catColor(i.category)}"></span>${esc(i.nature)}</h3>
+    <h3><span class="sw" style="background:${catColor(i.category)}"></span>${esc(i.nature)}${i.corrected ? `<span class="prec conf-confirmed" title="Fixed by hand: ${esc(i.corrected)}">corrected</span>` : ""}</h3>
     <div class="meta">${esc(i.category)} · ${new Date(i.first_ms).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div>
     <dl class="kv">
       <dt>Location</dt><dd>${esc(i.matched || i.address || i.place || "Unknown")}${i.precision ? `<span class="prec">${PREC[i.precision] || i.precision}</span>` : `<span class="prec">not mapped, still checking</span>`}${i.confidence ? `<span class="prec conf-${i.confidence}">${CONF[i.confidence] || i.confidence}</span>` : ""}</dd>
@@ -572,6 +572,7 @@ async function openIncident(id, fly) {
       ${i.units.length ? `<dt>Units</dt><dd>${esc(i.units.join(", "))}</dd>` : ""}
       ${i.zip ? `<dt>ZIP</dt><dd>${esc(i.zip)}</dd>` : ""}
     </dl>
+    <div style="margin:-6px 0 12px"><button class="btn" data-correct="${i.id}">Something wrong? Correct it</button></div>
     ${!(i.transmissions || []).length ? `<div class="tx"><p style="color:var(--muted)">Transcripts, audio and call
       details for this incident have expired. Only the call type, location and departments are kept
       (Settings → Data retention).</p></div>` : ""}
@@ -585,11 +586,101 @@ async function openIncident(id, fly) {
         <span class="sw" style="width:8px;height:8px;border-radius:50%;background:${catColor(h.category)}"></span>${esc(h.nature)}
         <span style="color:var(--muted)">${fmtTime(h.first_ms)}</span></div>`).join("")}</div>` : ""}`;
   document.getElementById("modal").classList.add("open");
+  CURRENT = i;
 }
 document.getElementById("modal").addEventListener("click", e => {
   if (e.target.id === "modal" || e.target.closest(".x")) closeModal();
   const h = e.target.closest("[data-hist]"); if (h) openIncident(+h.dataset.hist);
+  if (e.target.closest("[data-correct]")) openCorrection(CURRENT);
+  if (e.target.id === "pickOnMap") startPick();
+  if (e.target.id === "addWordFix") addWordFixRow();
+  if (e.target.id === "saveCorrection") saveCorrection();
+  if (e.target.id === "cancelCorrection") openIncident(CURRENT.id);
 });
+
+// ─────────────────────────────────────────────
+// Corrections: fix an incident by hand and teach the app
+// ─────────────────────────────────────────────
+let CURRENT = null, META = null, PICKED = null;
+function openCorrection(i, msg = "", err = false) {
+  const tax = (META && META.taxonomy) || {};
+  const depts = ((META && META.departments) || []).filter(d => ["fire", "ems", "rescue"].includes(d.kind));
+  const natures = Object.entries(tax).map(([cat, ns]) => `<optgroup label="${esc(cat)}">${ns.map(n =>
+    `<option ${n === i.nature ? "selected" : ""}>${esc(n)}</option>`).join("")}</optgroup>`).join("");
+  const locked = (META && META.locked);
+  document.getElementById("modalBody").innerHTML = `
+    <button class="x" aria-label="Close">×</button>
+    <h3>Correct this call</h3>
+    <div class="meta">Fixes are applied now, kept even if the call is reprocessed, and used to get similar
+      calls right: a corrected location is remembered for the address and place heard on this call, a
+      corrected call type becomes an example for the AI, and word fixes apply to every new transcript.</div>
+    <div class="set-row"><label class="name" for="cNature">Call type</label><select id="cNature">${natures}</select></div>
+    <div class="set-row"><label class="name" for="cAddress">Location</label>
+      <input type="text" id="cAddress" value="${esc(PICKED ? PICKED.address : (i.matched || i.address || ""))}" placeholder="12950 Talblick St">
+      <div class="help">Type the right address, or <button class="reset" id="pickOnMap">pick it on the map</button>.
+        ${PICKED ? `<b>Picked point:</b> ${PICKED.lat.toFixed(5)}, ${PICKED.lon.toFixed(5)}` : ""}</div></div>
+    <div class="set-row"><label class="name">Departments</label>
+      <div class="chans" id="cDepts">${depts.map(d => `<label><input type="checkbox" value="${esc(d.name)}"
+        ${i.agencies.includes(d.name) ? "checked" : ""}> ${esc(d.name)}</label>`).join("")}</div></div>
+    <div class="set-row"><label class="name">Misheard words</label>
+      <div id="cWords" class="chans"></div>
+      <div class="help">e.g. heard "Tablix", should be "Talblick". Applied to every new transcript.
+        <button class="reset" id="addWordFix">Add another</button></div></div>
+    <div class="set-foot">
+      ${locked ? `<input type="password" id="adminPw" placeholder="Admin password" value="${esc(adminPw.get())}" style="max-width:200px" autocomplete="current-password">` : ""}
+      <button class="btn primary" id="saveCorrection">Save correction</button>
+      <button class="btn" id="cancelCorrection">Cancel</button>
+      <span class="set-msg ${err ? "err" : ""}" id="cMsg">${esc(msg)}</span></div>`;
+  addWordFixRow();
+  document.getElementById("modal").classList.add("open");
+}
+function addWordFixRow() {
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;gap:6px";
+  row.innerHTML = `<input type="text" placeholder="Heard" class="wfHeard" style="flex:1">
+    <input type="text" placeholder="Should be" class="wfActual" style="flex:1">`;
+  document.getElementById("cWords").appendChild(row);
+}
+function startPick() {
+  const keepAddr = document.getElementById("cAddress").value;
+  closeModal();
+  document.querySelector('[data-view="mapView"]').click();
+  const banner = document.createElement("div");
+  banner.id = "pickBanner";
+  banner.style.cssText = "position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2500;background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--ring),0 4px 16px rgba(0,0,0,.2);border-radius:8px;padding:8px 12px;font-size:13px";
+  banner.innerHTML = `Click the map where this call was. <button class="btn" id="pickCancel" style="margin-left:8px">Cancel</button>`;
+  document.body.appendChild(banner);
+  map.getContainer().style.cursor = "crosshair";
+  const done = () => { banner.remove(); map.getContainer().style.cursor = ""; map.off("click", onPick); };
+  const onPick = ev => { done(); PICKED = { lat: ev.latlng.lat, lon: ev.latlng.lng, address: keepAddr }; openCorrection(CURRENT); };
+  banner.querySelector("#pickCancel").onclick = () => { done(); openCorrection(CURRENT); };
+  if (CURRENT.lat != null) map.setView([CURRENT.lat, CURRENT.lon], 17);
+  map.on("click", onPick);
+}
+async function saveCorrection() {
+  const i = CURRENT, body = {};
+  const nature = document.getElementById("cNature").value;
+  if (nature !== i.nature) body.nature = nature;
+  const addr = document.getElementById("cAddress").value.trim();
+  if (PICKED) { body.lat = PICKED.lat; body.lon = PICKED.lon; body.address = addr; }
+  else if (addr && addr !== (i.matched || i.address || "")) body.address = addr;
+  const depts = [...document.querySelectorAll("#cDepts input:checked")].map(x => x.value);
+  if (JSON.stringify([...depts].sort()) !== JSON.stringify([...i.agencies].sort())) body.departments = depts;
+  const fixes = [...document.querySelectorAll("#cWords > div")].map(r => ({
+    heard: r.querySelector(".wfHeard").value.trim(), actual: r.querySelector(".wfActual").value.trim() }))
+    .filter(f => f.heard && f.actual);
+  if (fixes.length) body.word_fixes = fixes;
+  if (!Object.keys(body).length) return openCorrection(i, "Nothing changed.");
+  const pwEl = document.getElementById("adminPw");
+  if (pwEl) adminPw.set(pwEl.value);
+  const r = await fetch(`api/incidents/${i.id}`, { method: "PUT", body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json", "X-Admin-Password": pwEl ? pwEl.value : "" } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return openCorrection(i, j.detail || `Error ${r.status}`, true);
+  PICKED = null;
+  await openIncident(i.id, true);
+  refresh();
+}
 function closeModal() {
   document.getElementById("modal").classList.remove("open");
   document.querySelectorAll("#modalBody audio").forEach(a => a.pause());
@@ -633,6 +724,19 @@ async function openSettings(msg = "", err = false) {
       ${st.help || st.changed ? `<div class="help">${esc(st.help)}${st.changed ? ` <button class="reset" data-reset="${st.key}">Reset to default (${esc(st.kind === "channels" ? "all" : st.default === "" ? "empty" : String(st.default))})</button>` : ""}</div>` : ""}
     </div>`;
   }
+  const L = await fetch("api/learned").then(r => r.json()).catch(() => null);
+  if (L) {
+    html += `<div class="set-group">Learned from corrections</div>
+      <div class="help" style="font-size:12px;color:var(--muted)">${L.call_types} corrected call type(s) used as examples for the AI.
+        Fix a call from its incident view ("Something wrong? Correct it").</div>
+      ${L.word_fixes.length ? `<div class="set-row" style="display:block"><label class="name">Misheard words</label>
+        ${L.word_fixes.map(w => `<div style="display:flex;gap:8px;font-size:13px;padding:2px 0">"${esc(w.heard)}" → "${esc(w.actual)}"
+          <button class="reset" data-forget="word" data-key="${esc(w.heard)}">remove</button></div>`).join("")}</div>` : ""}
+      ${L.locations.length ? `<div class="set-row" style="display:block"><label class="name">Corrected locations</label>
+        ${L.locations.map(l => `<div style="display:flex;gap:8px;font-size:13px;padding:2px 0">${esc(l.name.replace(/^addr:/, ""))}
+          <span style="color:var(--muted)">(${esc(l.dept)})</span> → ${esc(l.matched || "")}
+          <button class="reset" data-forget="location" data-key="${esc(l.name)}" data-dept="${esc(l.dept)}">remove</button></div>`).join("")}</div>` : ""}`;
+  }
   html += `<div class="set-foot">
       ${s.locked ? `<input type="password" id="adminPw" placeholder="Admin password" value="${esc(adminPw.get())}" style="max-width:200px" autocomplete="current-password">` : ""}
       <button class="btn primary" id="saveSettings">Save</button>
@@ -661,6 +765,13 @@ async function saveSettings(body) {
   loadStatus();
 }
 document.getElementById("settingsBtn").addEventListener("click", () => openSettings());
+async function forgetLearned(kind, key, dept) {
+  const pwEl = document.getElementById("adminPw");
+  if (pwEl) adminPw.set(pwEl.value);
+  const q = new URLSearchParams({ kind, key }); if (dept) q.set("dept", dept);
+  const r = await fetch(`api/learned?${q}`, { method: "DELETE", headers: { "X-Admin-Password": pwEl ? pwEl.value : adminPw.get() } });
+  openSettings(r.ok ? "Removed." : (await r.json().catch(() => ({}))).detail || `Error ${r.status}`, !r.ok);
+}
 document.getElementById("modalBody").addEventListener("click", e => {
   if (e.target.id === "saveSettings") {
     const body = {};
@@ -669,6 +780,8 @@ document.getElementById("modalBody").addEventListener("click", e => {
   }
   const rs = e.target.closest("[data-reset]");
   if (rs) saveSettings({ [rs.dataset.reset]: null });
+  const fg = e.target.closest("[data-forget]");
+  if (fg) forgetLearned(fg.dataset.forget, fg.dataset.key, fg.dataset.dept);
 });
 
 // ─────────────────────────────────────────────
@@ -906,6 +1019,8 @@ document.getElementById("bfBtn").addEventListener("click", async () => {
 (async function init() {
   try {
     const m = await fetch("api/meta").then(r => r.json());
+    META = m;
+    fetch("api/settings").then(r => r.json()).then(s => { META.locked = s.locked; }).catch(() => {});
     cartoKey = m.carto_key;
     const c = m.county || {};
     if (c.title) { document.getElementById("title").textContent = c.title; document.title = c.title; }

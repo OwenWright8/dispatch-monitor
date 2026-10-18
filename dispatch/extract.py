@@ -91,7 +91,9 @@ EXAMPLES = list(_P.examples) + [
 
 def _messages(transcript: str):
     msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for t, out in EXAMPLES:
+    from .corrections import examples_for
+    # county examples, then calls a person corrected that look like this one
+    for t, out in EXAMPLES + examples_for(transcript):
         msgs.append({"role": "user", "content": f"Transcript: {t}"})
         msgs.append({"role": "assistant", "content": json.dumps(out)})
     msgs.append({"role": "user", "content": f"Transcript: {transcript[:1500]}"})
