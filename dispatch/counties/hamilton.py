@@ -15,7 +15,7 @@ Departments: Hamilton County government fire department directory
 RadioReference (wiki.radioreference.com/index.php/Hamilton_County_(IN)).
 """
 
-from . import ChannelSpec, Department, Profile
+from . import ChannelSpec, Department, Profile, Station
 
 FIRE = r"(?:\s+township)?\s+fire\b"
 
@@ -113,6 +113,41 @@ PROFILE = Profile(
         (r"\binjured (?:version|person)\b", "injured person"),
         (r"\b(?:time ?out|timeout)\b(?=,?\s*\d{3,4}\b)", "tone time"),
     ),
+    # "55 George": first-due station 55 (Jackson Township, unit 355). Addresses from
+    # the departments' station pages and the NERIS registry, geocoded with the Census
+    # geocoder (2026-10). The map data labels Carmel 46 as "Fire Station 48", so the
+    # official list wins.
+    grid_codes=True,
+    stations={
+        "15": Station(40.0568, -85.9105, "Wayne Township Fire", "Station 15", "18441 Durbin Rd"),
+        "21": Station(40.1203, -86.0217, "Cicero Fire", "Station 21", "Cicero"),
+        "31": Station(40.1615, -85.9406, "White River Township Fire", "Station 31", "12695 E 256th St"),
+        "41": Station(39.9664, -86.1290, "Carmel Fire", "Station 41", "2 Civic Sq"),
+        "42": Station(39.9410, -86.2227, "Carmel Fire", "Station 42", "3610 W 106th St"),
+        "43": Station(39.9415, -86.1095, "Carmel Fire", "Station 43", "3242 E 106th St"),
+        "44": Station(39.9785, -86.0841, "Carmel Fire", "Station 44", "5032 E Main St"),
+        "45": Station(39.9428, -86.1459, "Carmel Fire", "Station 45", "10701 N College Ave"),
+        "46": Station(39.9850, -86.1682, "Carmel Fire", "Station 46", "540 W 136th St"),
+        "55": Station(40.1761, -86.0286, "Jackson Township Fire", "Station 55", "508 W Main St, Arcadia"),
+        "61": Station(40.1339, -86.2207, "Sheridan Fire", "Station 61", "506 S Main St"),
+        "71": Station(40.0443, -86.0136, "Noblesville Fire", "Station 71", "135 S 9th St"),
+        "72": Station(40.0622, -86.0490, "Noblesville Fire", "Station 72", "400 S Harbour Dr"),
+        "73": Station(40.0266, -86.0006, "Noblesville Fire", "Station 73", "2101 Greenfield Ave"),
+        "74": Station(40.0894, -86.0335, "Noblesville Fire", "Station 74", "20777 Hague Rd"),
+        "75": Station(40.0658, -85.9873, "Noblesville Fire", "Station 75", "10170 E 191st St"),
+        "76": Station(40.0316, -86.0706, "Noblesville Fire", "Station 76", "16800 Hazel Dell Rd"),
+        "77": Station(40.0110, -85.9193, "Noblesville Fire", "Station 77", "15251 Olio Rd"),
+        "81": Station(40.0334, -86.1835, "Westfield Fire", "Station 81", "17001 Ditch Rd"),
+        "82": Station(40.0075, -86.1246, "Westfield Fire", "Station 82", "1920 E 151st St"),
+        "83": Station(40.0484, -86.1093, "Westfield Fire", "Station 83", "17944 Grassy Branch Rd"),
+        "91": Station(39.9595, -86.0178, "Fishers Fire", "Station 91", "2 Municipal Dr"),
+        "92": Station(39.9574, -85.9424, "Fishers Fire", "Station 92", "11595 Brooks School Rd"),
+        "93": Station(39.9386, -86.0523, "Fishers Fire", "Station 93", "10501 Allisonville Rd"),
+        "94": Station(39.9434, -85.9949, "Fishers Fire", "Station 94", "10701 Cumberland Rd"),
+        "95": Station(39.9792, -85.9735, "Fishers Fire", "Station 95", "10870 E 131st St"),
+        "96": Station(39.9396, -85.8907, "Fishers Fire", "Station 96", "E 104th St & Florida Rd"),
+        "97": Station(39.9873, -85.8953, "Fishers Fire", "Station 97", "15109 E 136th St"),
+    },
     hospitals=("Riverview", "Riverview Health", "IU North", "IU Health North", "St. Vincent", "Ascension",
                "Community North", "Community Heart and Vascular", "Methodist", "Riley", "Eskenazi"),
     # County dispatch reads: units, call type, house number, street, "at" place,

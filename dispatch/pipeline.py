@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from . import config, corrections, db, departments, extract, openmhz, settings, transcribe
-from .geo import Geocoder, GeoResult, Hints, _dist_m, learn_key, parse_cross_streets
+from .geo import Geocoder, GeoResult, Hints, _dist_m, in_county, learn_key, parse_cross_streets, parse_grid
 from .taxonomy import category_for
 
 log = logging.getLogger(__name__)
@@ -349,6 +349,7 @@ def handle_transcript(tx, transcript: str, use_llm: bool = True) -> tuple[dict, 
     fields, method = _extract(transcript) if use_llm else extract.extract(transcript, use_llm=False)
     fields["departments"] = departments.detect(transcript, fields.get("units"), ch) or [ch.agency if ch else tx["agency"]]
     fields["cross_streets"] = parse_cross_streets(transcript)
+    fields["grid"], grid = grid_station(transcript)
     geo = None
     if fields["is_dispatch"] and (fields["address"] or fields["place"]):
         town, anchors = _department_towns(fields["departments"])
@@ -357,7 +358,7 @@ def handle_transcript(tx, transcript: str, use_llm: bool = True) -> tuple[dict, 
             anchors = [c for c in [config.PROFILE.city_centers.get(ch.city_hint.lower())] if c]
         known = known_place(fields["place"], fields["departments"], fields["address"])
         geo = geocoder().geocode(fields["address"], fields["place"], city, anchors, fields["cross_streets"],
-                                 known=known)
+                                 known=known, grid=grid)
         # The address is read out twice; if Whisper heard the readings differently, try
         # each and keep the one that places best ("1455" vs "1465 James Dean Drive").
         readings = [a for a in extract.address_readings(transcript)
@@ -365,7 +366,7 @@ def handle_transcript(tx, transcript: str, use_llm: bool = True) -> tuple[dict, 
         if readings and not (geo and geo.precision == "address" and geo.confidence == "confirmed"):
             for alt in readings[:3]:
                 g = geocoder().geocode(alt, fields["place"], city, anchors, fields["cross_streets"],
-                                       known=known_place(fields["place"], fields["departments"], alt))
+                                       known=known_place(fields["place"], fields["departments"], alt), grid=grid)
                 if g and (geo is None or _better_location(g, _as_row(geo), fields["departments"])):
                     geo, fields["address"] = g, alt
         fields["address_readings"] = readings
@@ -373,6 +374,57 @@ def handle_transcript(tx, transcript: str, use_llm: bool = True) -> tuple[dict, 
     if inc:
         learn_place(inc)
     return fields, method, inc
+
+
+_stations: dict | None = None
+
+
+def station_point(number: str):
+    """Location of fire station `number` (the first-due station of a grid code):
+    the county profile's list first, then "Fire Station 55" / "Station No. 81" in the map data."""
+    global _stations
+    if number in config.PROFILE.stations:
+        s = config.PROFILE.stations[number]
+        return (s.lat, s.lon)
+    if _stations is None:
+        found: dict[str, list] = {}
+        for name, lat, lon, _ in geocoder().places.places:
+            m = re.search(r"\bstation\s*(?:no\.?|#)?\s*(\d{2})\b", name, re.I)
+            if m and "fire" in name.lower() and in_county(lat, lon):
+                found.setdefault(m.group(1), []).append((lat, lon))
+        _stations = {k: (sum(p[0] for p in v) / len(v), sum(p[1] for p in v) / len(v)) for k, v in found.items()}
+    return _stations.get(number)
+
+
+def all_stations() -> list[dict]:
+    """Fire stations for the map: the county profile's list, plus fire stations the map
+    data names that aren't already listed (department guessed from the name)."""
+    out = [{"number": n, "lat": s.lat, "lon": s.lon, "dept": s.dept, "label": s.label, "address": s.address}
+           for n, s in config.PROFILE.stations.items()]
+    for name, lat, lon, _ in geocoder().places.places:
+        low = name.lower()
+        if "fire" not in low or not any(w in low for w in ("station", "department")) \
+                or "museum" in low or not in_county(lat, lon):
+            continue
+        if any(_dist_m((lat, lon), (s["lat"], s["lon"])) < 400 for s in out):
+            continue                              # same building as a listed station
+        dept = next((d.name for d in config.PROFILE.departments
+                     if any(w in low for w in {d.name.lower().replace(" fire", ""),
+                                               (d.spoken or "").lower().replace(" fire", "")} if len(w) > 3)), "")
+        if config.PROFILE.stations and not dept:
+            continue                              # the county's own list is complete; skip neighbours' stations
+        m = re.search(r"\bstation\s*(?:no\.?|#)?\s*(\d{1,3})\b", name, re.I)
+        out.append({"number": m.group(1) if m else "", "lat": lat, "lon": lon, "dept": dept, "label": name,
+                    "address": ""})
+    return out
+
+
+def grid_station(transcript: str):
+    """(code, station location) for the map-grid code read out, e.g. ("55 G", (40.17, -86.02))."""
+    if not config.PROFILE.grid_codes:
+        return None, None
+    g = parse_grid(transcript)
+    return (f"{g[0]} {g[1]}", station_point(g[0])) if g else (None, None)
 
 
 def known_place(place: str | None, depts: list[str], address: str | None = None) -> GeoResult | None:
@@ -564,7 +616,7 @@ def retry_locations(limit: int = 40) -> int:
         c.execute("UPDATE incidents SET geo_tries = geo_tries + 1 WHERE id=?", (row["id"],))
         agencies = json.loads(row["agencies"])
         town, anchors = _department_towns(agencies)
-        cands, cross = [], []
+        cands, cross, grid = [], [], None
         for tx in c.execute("SELECT talkgroup, transcript, extracted FROM transmissions WHERE incident_id=? "
                             "ORDER BY time_ms", (row["id"],)).fetchall():
             f = json.loads(tx["extracted"] or "{}")
@@ -575,6 +627,7 @@ def retry_locations(limit: int = 40) -> int:
                 if (a or p) and (a, p) not in cands:
                     cands.append((a, p))
             cross += [x for x in f.get("cross_streets") or [] if x not in cross]
+            grid = grid or grid_station(tx["transcript"] or "")[1]
             ch = config.CHANNELS.get(tx["talkgroup"])
             if not anchors and ch:
                 anchors = [x for x in [config.PROFILE.city_centers.get(ch.city_hint.lower())] if x]
@@ -582,7 +635,7 @@ def retry_locations(limit: int = 40) -> int:
         best = None
         for a, p in cands:
             geo = geocoder().geocode(a, p, town or config.PROFILE.name, anchors, cross, fresh=True,
-                                     known=known_place(p, agencies, a))
+                                     known=known_place(p, agencies, a), grid=grid)
             if geo and (best is None or _better_location(geo, _as_row(best), agencies)):
                 best = geo
         if best and _better_location(best, row, agencies):

@@ -166,6 +166,12 @@ async def correct_incident(inc_id: int, req: Request):
     return {"changed": changed, "incident": incident(inc_id)}
 
 
+@app.get("/api/stations")
+def stations():
+    """Fire stations for the map layer."""
+    return pipeline.all_stations()
+
+
 @app.get("/api/learned")
 def learned():
     """What the app learned from corrections: word fixes, corrected locations, call-type examples."""

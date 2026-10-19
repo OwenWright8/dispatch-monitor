@@ -107,6 +107,10 @@ main { flex: 1; min-height: 0; display: flex; }
 #map { position: absolute; inset: 0; background: var(--surface-2); }
 .map-ctl { position: absolute; top: 10px; right: 10px; z-index: 500; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 .map-ctl .seg { background: var(--surface); box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+.map-toggle { background: var(--surface); box-shadow: 0 1px 4px rgba(0,0,0,.15); border-radius: 7px; padding: 4px 9px; }
+.station-icon { width: 22px; height: 22px; border-radius: 5px; background: var(--c-fire); color: #fff; font: 700 10px/22px var(--sans);
+  text-align: center; box-shadow: 0 0 0 2px var(--surface), 0 1px 4px rgba(0,0,0,.35); }
+.station-icon.ems { background: var(--c-medical); }
 .legend { background: var(--surface); border-radius: 8px; padding: 8px 10px; box-shadow: 0 1px 4px rgba(0,0,0,.15); font-size: 12px; display: grid; gap: 3px; }
 .legend div { display: flex; align-items: center; gap: 6px; color: var(--ink-2); }
 .legend .sw { width: 9px; height: 9px; border-radius: 50%; }
@@ -285,6 +289,7 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
       <div id="map"></div>
       <div class="map-ctl">
         <div class="seg" id="modeSeg"><button data-mode="dots" class="on">Incidents</button><button data-mode="heat">Heatmap</button></div>
+        <label class="toggle map-toggle"><input type="checkbox" id="stationsToggle"> Fire stations</label>
         <div class="legend" id="mapLegend"></div>
       </div>
     </div>
@@ -466,6 +471,29 @@ document.getElementById("modeSeg").addEventListener("click", e => {
   renderMap();
 });
 map.on("moveend", () => { if (F.bbox) refresh(); });
+
+// Fire stations layer (with their station numbers), remembered between visits
+const stationLayer = L.layerGroup();
+let stationsLoaded = false;
+async function showStations(on) {
+  store.set("stations", on);
+  if (!on) { map.removeLayer(stationLayer); return; }
+  if (!stationsLoaded) {
+    const list = await fetch("api/stations").then(r => r.json()).catch(() => []);
+    for (const s of list) {
+      const icon = L.divIcon({ className: "", iconSize: [22, 22], iconAnchor: [11, 11],
+        html: `<div class="station-icon ${DEPT_KIND[s.dept] === "ems" ? "ems" : ""}">${esc(s.number || "FD")}</div>` });
+      const m = L.marker([s.lat, s.lon], { icon, keyboard: false, zIndexOffset: -1000 });
+      const tip = `<b>${esc(s.label)}</b>${s.dept ? `<div class="m">${esc(s.dept)}</div>` : ""}${s.address ? `<div class="m">${esc(s.address)}</div>` : ""}`;
+      m.on("mouseover", ev => showTip(ev.originalEvent, tip));
+      m.on("mouseout", hideTip);
+      stationLayer.addLayer(m);
+    }
+    stationsLoaded = true;
+  }
+  stationLayer.addTo(map);
+}
+document.getElementById("stationsToggle").addEventListener("change", e => showStations(e.target.checked));
 
 function renderMap() {
   if (heat) { map.removeLayer(heat); heat = null; }
@@ -1049,6 +1077,7 @@ document.getElementById("bfBtn").addEventListener("click", async () => {
   } catch {}
   document.querySelectorAll("#rangeSeg button").forEach(x => x.classList.toggle("on", +x.dataset.days === F.days));
   document.querySelectorAll("#modeSeg button").forEach(x => x.classList.toggle("on", x.dataset.mode === mode));
+  if (store.get("stations", false)) { document.getElementById("stationsToggle").checked = true; showStations(true); }
   setBasemap();
   buildCatChips();
   if (location.hash === "#stats") { document.querySelector('[data-view="statsView"]').click(); }

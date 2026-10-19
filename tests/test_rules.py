@@ -116,3 +116,24 @@ def test_both_address_readings_found():
     assert r[0] == "1465 James Dean Drive"            # equal counts: the later readback first
     r = extract.address_readings("Engine 374, 18623 Wood Place. Engine 374, 18623 Wood Place, 1720.")
     assert r == ["18623 Wood Place"]
+
+
+def test_grid_codes():
+    from dispatch.geo import parse_grid
+    assert parse_grid("cross of South Washington Street and West Street, 55th George, timeout, 8-5") == ("55", "G")
+    assert parse_grid("unconscious person in Quarter 72, John 1720.") == ("72", "J")
+    assert parse_grid("Quadrant 42, Boy 1722.") == ("42", "B")
+    assert parse_grid("46, Adams, tone time 607") == ("46", "A")
+    assert parse_grid("Engine 74 from Ladder 72. Clear.") is None
+    assert parse_grid("Room 38 David is the caller") is None           # a room number, not a grid code
+
+
+def test_grid_far_from_pin_is_doubtful():
+    from dispatch.geo import Geocoder, GeoResult, Hints
+    g = Geocoder.__new__(Geocoder)
+    near = GeoResult(40.176, -86.029, "address", "101 Main St", None, "tiger")
+    far = GeoResult(39.978, -86.128, "address", "101 W Main St", None, "tiger")
+    h = Hints(anchors=[(40.1756, -86.0217)], grid=(40.1761, -86.0286))
+    assert g._confidence(near, h) == "high"
+    assert g._confidence(far, h) == "doubtful"
+    assert h.rank((near.lat, near.lon)) < h.rank((far.lat, far.lon))

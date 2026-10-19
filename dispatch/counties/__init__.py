@@ -42,6 +42,15 @@ class Department:
 
 
 @dataclass(frozen=True)
+class Station:
+    lat: float
+    lon: float
+    dept: str                       # department name (as in Profile.departments)
+    label: str                      # "Station 41"
+    address: str = ""
+
+
+@dataclass(frozen=True)
 class ChannelSpec:
     talkgroup: int
     label: str                      # what the channel is ("County fire dispatch")
@@ -79,6 +88,12 @@ class Profile:
     # Worked examples of this county's dispatch style for the LLM:
     # ((transcript, expected JSON fields), ...)
     examples: tuple = ()
+    # Fire stations, keyed by station number. Shown on the map, and used for
+    # grid codes: when dispatch reads one ("55 George") the number is the
+    # first-due station. Stations not listed are taken from the map data
+    # ("Fire Station 55").
+    grid_codes: bool = False
+    stations: dict = field(default_factory=dict)       # {"41": Station(...)}
     # Hospitals units transport to ("en route to Riverview with one" is not a call there).
     hospitals: tuple[str, ...] = ()
 

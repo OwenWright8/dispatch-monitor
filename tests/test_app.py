@@ -87,3 +87,11 @@ def test_unknown_call_type_rejected():
 @pytest.mark.parametrize("path", ["/", "/api/incidents?days=0", "/api/stats?days=0", "/api/learned"])
 def test_pages_load(path):
     assert client.get(path).status_code == 200
+
+
+def test_stations_endpoint_lists_profile_stations():
+    got = client.get("/api/stations").json()
+    listed = {s["number"] for s in got}
+    assert set(config.PROFILE.stations) <= listed
+    for s in got:
+        assert config.COUNTY_BBOX[0] <= s["lat"] <= config.COUNTY_BBOX[2]
