@@ -88,6 +88,9 @@ class Profile:
     unit_examples: str = '"Station 3", "Engine 1502", "Medic 5"'
     # Units shortened on the air: with "3", "Ladder 72" is Ladder 372 (Hamilton).
     unit_shorthand_prefix: str = ""
+    # Do units report en route / on scene / clear on the radio? Hamilton does that on the
+    # CAD terminals, so the dashboard only shows which units were sent.
+    radio_unit_status: bool = True
     # Worked examples of this county's dispatch style for the LLM:
     # ((transcript, expected JSON fields), ...)
     examples: tuple = ()
