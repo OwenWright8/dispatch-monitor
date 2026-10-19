@@ -133,6 +133,7 @@ def status():
         "whisper_model": "speech-to-text server" if settings.get("WHISPER_URL") and transcribe.remote_status["ok"] is not False else settings.get("WHISPER_MODEL"),
         "whisper_server": transcribe.remote_status,
         "backfill": s["backfill"],
+        "retranscribe": s["retranscribe"],
         "now": time.time(),
     }
 
@@ -215,6 +216,13 @@ def ollama_models():
         return {"ok": True, "models": sorted(m["name"] for m in r.json().get("models", []))}
     except Exception as e:
         return {"ok": False, "error": str(e)[:200], "models": []}
+
+
+@app.post("/api/retranscribe")
+def start_retranscribe(req: Request, hours: float = Query(168, gt=0, le=24 * 31)):
+    """Run recent clips through speech-to-text again (e.g. the GPU server), then rebuild incidents."""
+    _require_admin(req)
+    return {"started": pipeline.start_retranscribe(hours), "retranscribe": pipeline.status["retranscribe"]}
 
 
 @app.post("/api/backfill")

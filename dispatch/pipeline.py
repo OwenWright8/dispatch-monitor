@@ -33,6 +33,7 @@ status = {
     "llm_ok": None, "llm_error": None,
     "last_processed": None, "started": time.time(),
     "backfill": {"running": False, "hours": 0, "queued": 0, "error": None},
+    "retranscribe": {"running": False, "hours": 0, "done": 0, "total": 0, "changed": 0, "error": None},
 }
 
 _geocoder: Geocoder | None = None
@@ -127,6 +128,71 @@ def backfill(hours: float, _locked: bool = False) -> int:
     finally:
         b["running"] = False
         _backfill_lock.release()
+
+
+_retranscribe_lock = threading.Lock()
+
+
+def retranscribe(hours: float, rebuild: bool = True) -> int:
+    """Run the last `hours` of transcribed clips through speech-to-text again (e.g. after
+    switching to a GPU speech-to-text server) and, if anything changed, rebuild the
+    incidents. Audio comes from the saved clip, else from OpenMHz. Returns clips changed."""
+    st = status["retranscribe"]
+    hours = min(hours, settings.get("DETAIL_RETENTION_DAYS") * 24)
+    c = db.conn()
+    since = int((time.time() - hours * 3600) * 1000)
+    rows = c.execute("SELECT id, url, audio_path, transcript_raw, transcript FROM transmissions "
+                     "WHERE status='done' AND time_ms >= ? ORDER BY time_ms DESC", (since,)).fetchall()
+    st.update(running=True, hours=hours, done=0, total=len(rows), changed=0, error=None)
+    log.info(f"Re-transcribing {len(rows)} clips from the last {hours:g} h")
+    try:
+        for tx in rows:
+            path, tmp = tx["audio_path"], None
+            try:
+                if not (path and os.path.exists(path)):
+                    fd, tmp = tempfile.mkstemp(suffix=".m4a")
+                    os.close(fd)
+                    with open(tmp, "wb") as f:
+                        f.write(openmhz.download(tx["url"]))
+                    path = tmp
+                    time.sleep(1.0)              # be polite to OpenMHz
+                raw = transcribe.transcribe(path)
+            except Exception as e:
+                log.debug(f"Re-transcribe {tx['id']} skipped: {e}")
+                st["done"] += 1
+                continue
+            finally:
+                if tmp and os.path.exists(tmp):
+                    os.unlink(tmp)
+            if raw and raw != (tx["transcript_raw"] or tx["transcript"]):
+                c.execute("UPDATE transmissions SET transcript_raw=?, transcript=? WHERE id=?",
+                          (raw, departments.normalize(raw), tx["id"]))
+                st["changed"] += 1
+            st["done"] += 1
+        log.info(f"Re-transcribed {st['done']} clips, {st['changed']} changed")
+        if rebuild and st["changed"]:
+            reprocess()
+        return st["changed"]
+    except Exception as e:
+        st["error"] = str(e)[:300]
+        log.error(f"Re-transcribe failed: {e}")
+        return st["changed"]
+    finally:
+        st["running"] = False
+
+
+def start_retranscribe(hours: float) -> bool:
+    if not _retranscribe_lock.acquire(blocking=False):
+        return False
+
+    def run():
+        try:
+            retranscribe(hours)
+        finally:
+            _retranscribe_lock.release()
+    status["retranscribe"]["running"] = True
+    threading.Thread(target=run, name="retranscribe", daemon=True).start()
+    return True
 
 
 def start_backfill(hours: float) -> bool:
