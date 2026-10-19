@@ -2,7 +2,8 @@
 
 api.openmhz.com and media2.openmhz.com sit behind Cloudflare, which rejects
 python-requests and cloudscraper with a JS challenge. curl_cffi impersonates a
-real browser's TLS fingerprint and gets straight through.
+real browser's TLS fingerprint. If Cloudflare still challenges us, every request
+pauses for a cool-down rather than retrying (see _request).
 
 Endpoints (all accept filter-type=talkgroup&filter-code=1,2,3):
   /{system}/calls               newest 50 calls
@@ -73,29 +74,49 @@ def _filter() -> dict:
     return {"filter-type": "talkgroup", "filter-code": ",".join(str(t) for t in settings.enabled_channels()) or "0"}
 
 
+# After a Cloudflare challenge nobody (poller, downloads, backfill) contacts OpenMHz until
+# a cool-down has passed: 1 minute, doubling per challenge in a row up to 15. Quick
+# retries are what get an IP flagged in the first place.
+COOL_START_S, COOL_MAX_S = 60, 900
+_cool = {"until": 0.0, "n": 0}
+
+
+def cooling_down() -> float:
+    """Seconds left before OpenMHz may be contacted again (0 when it may)."""
+    return max(0.0, _cool["until"] - time.time())
+
+
+def _on_challenge():
+    with _identity_lock:
+        _cool["n"] += 1
+        wait = min(COOL_START_S * 2 ** (_cool["n"] - 1), COOL_MAX_S)
+        _cool["until"] = time.time() + wait
+    log.warning(f"OpenMHz answered with a Cloudflare challenge; pausing all requests for {wait}s")
+    _rotate()                                       # the next try uses another browser identity
+
+
 def _request(url: str, timeout: int, **params):
-    """GET with Cloudflare recovery: a fresh session first, then other browser identities."""
+    """One GET (plus one retry with a fresh session after a connection error). A Cloudflare
+    challenge starts the shared cool-down and raises Challenged without retrying."""
+    left = cooling_down()
+    if left:
+        raise Challenged(f"OpenMHz Cloudflare challenge; next try in {round(left)}s")
     last = None
-    for attempt in range(4):
+    for attempt in range(2):
         try:
             r = _session().get(url, params=params or None, timeout=timeout)
-        except Exception as e:                      # connection reset, TLS error: new session, then identity
+        except Exception as e:                      # connection reset, TLS error: fresh session once
             last = e
-            if attempt == 0:
-                _local.s = None
-            else:
-                _rotate()
-        else:
-            if not _challenged(r):
-                r.raise_for_status()
-                return r
-            last = Challenged("OpenMHz Cloudflare challenge")
-            if attempt == 0:
-                _local.s = None                     # often enough: same identity, fresh cookies
-            else:
-                _rotate()
-        time.sleep(2 + attempt * 4)
-    raise last if isinstance(last, Challenged) else RuntimeError(f"OpenMHz unreachable: {last}")
+            _local.s = None
+            time.sleep(3)
+            continue
+        if _challenged(r):
+            _on_challenge()
+            raise Challenged("OpenMHz Cloudflare challenge")
+        r.raise_for_status()
+        _cool["n"] = 0
+        return r
+    raise RuntimeError(f"OpenMHz unreachable: {last}")
 
 
 def _get(path: str, **params) -> dict:

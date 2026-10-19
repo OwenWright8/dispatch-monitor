@@ -233,6 +233,7 @@ def poller_loop(stop: threading.Event):
         status["poll_failures"] = failures
         interval = settings.get("POLL_INTERVAL_S")
         delay = interval if not failures else min(interval * 2 ** min(failures, 6), 300)
+        delay = max(delay, openmhz.cooling_down() + 1)      # after a Cloudflare challenge, wait it out
         status["next_poll"] = time.time() + delay
         if stop.wait(delay):
             return
@@ -592,6 +593,10 @@ def worker_loop(stop: threading.Event):
         c.execute("UPDATE transmissions SET attempts = attempts + 1 WHERE id=?", (tx["id"],))
         try:
             process(tx)
+        except openmhz.Challenged:
+            # Not this clip's fault: give the attempt back and wait until OpenMHz may be asked again
+            c.execute("UPDATE transmissions SET attempts = attempts - 1 WHERE id=?", (tx["id"],))
+            stop.wait(max(5, openmhz.cooling_down()))
         except Exception as e:
             log.warning(f"Transmission {tx['id']} failed: {e}")
             c.execute("UPDATE transmissions SET error=?, status=CASE WHEN attempts >= 4 THEN 'error' ELSE status END "
@@ -662,10 +667,25 @@ def housekeeping_loop(stop: threading.Event):
             recheck_rules_only()
         except Exception as e:
             log.warning(f"Re-checking keyword-only calls failed: {e}")
+        try:
+            requeue_blocked()
+        except Exception as e:
+            log.warning(f"Requeueing blocked clips failed: {e}")
         stop.wait(900)
 
 
 RECHECK_HOURS = 24
+
+
+def requeue_blocked() -> int:
+    """Clips whose audio couldn't be fetched because OpenMHz was challenging us get
+    another go (last 24 h), instead of staying failed."""
+    n = db.conn().execute("UPDATE transmissions SET status='pending', attempts=0, error=NULL WHERE status='error' "
+                          "AND (error LIKE '%Cloudflare%' OR error LIKE '%OpenMHz unreachable%') AND time_ms >= ?",
+                          (int((time.time() - RECHECK_HOURS * 3600) * 1000),)).rowcount
+    if n:
+        log.info(f"Queued {n} clip(s) again that failed while OpenMHz was blocking requests")
+    return n
 
 
 def recheck_rules_only(limit: int = 200) -> int:

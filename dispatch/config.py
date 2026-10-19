@@ -75,7 +75,7 @@ OPENMHZ_SYSTEM = _env("OPENMHZ_SYSTEM", PROFILE.openmhz_system)
 OPENMHZ_API = _env("OPENMHZ_API", "https://api.openmhz.com")
 CHANNELS = (_parse_channels(os.environ["CHANNELS"]) if os.environ.get("CHANNELS", "").strip()
             else {c.talkgroup: _from_spec(c) for c in PROFILE.channels})
-POLL_INTERVAL_S = int(_env("POLL_INTERVAL_S", "20"))
+POLL_INTERVAL_S = int(_env("POLL_INTERVAL_S", "30"))   # gentle on OpenMHz; gaps are filled by paging back
 BACKFILL_HOURS = float(_env("BACKFILL_HOURS", "24"))   # history to pull on first start
 MIN_CALL_SECONDS = int(_env("MIN_CALL_SECONDS", "4"))  # shorter clips are acks/keyups
 
