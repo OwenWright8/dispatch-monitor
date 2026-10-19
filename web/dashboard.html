@@ -1365,11 +1365,13 @@ async function loadStatus() {
     // A banner under the header whenever new calls may be delayed
     const banner = document.getElementById("feedBanner");
     const since = s.last_poll ? ` (last good check ${hm(s.last_poll * 1000)})` : "";
-    const soft = !s.last_poll || (healing && s.poll_failures < 20);
+    const soft = !healing || s.poll_failures < 20;
+    const why = /cloudflare/i.test(s.last_poll_error || "") ? " (OpenMHz is asking for a browser check; trying other browser identities)" : "";
     banner.className = fresh ? "" : soft ? "on" : "on down";
-    banner.textContent = fresh ? "" : !s.last_poll ? "Connecting to the radio feed…"
-      : soft ? `Reconnecting to the radio feed${retryIn != null ? ` (retry in ${retryIn}s)` : ""}. New calls may be delayed.`
-      : `The radio feed is down${since}. The monitor keeps retrying; calls shown may be out of date.`;
+    banner.textContent = fresh ? ""
+      : !healing ? "Connecting to the radio feed…"
+      : soft ? `Reconnecting to the radio feed${why}${retryIn != null ? `, next try in ${retryIn}s` : ""}. New calls may be delayed.`
+      : `The radio feed is down${since}${why}. The monitor keeps retrying; calls shown may be out of date.`;
     const llm = !s.llm.enabled ? "rules only"
       : (s.llm.error || "").startsWith("Downloading") ? `${s.llm.error}…`
       : s.llm.ok === false ? `AI model offline (keyword rules)` : s.llm.model;
