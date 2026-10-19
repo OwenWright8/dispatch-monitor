@@ -655,7 +655,37 @@ def housekeeping_loop(stop: threading.Event):
             retry_locations()
         except Exception as e:
             log.warning(f"Location retry failed: {e}")
+        try:
+            recheck_rules_only()
+        except Exception as e:
+            log.warning(f"Re-checking keyword-only calls failed: {e}")
         stop.wait(900)
+
+
+RECHECK_HOURS = 24
+
+
+def recheck_rules_only(limit: int = 200) -> int:
+    """While the AI model was down, clips went through the keyword rules only, which miss
+    some dispatches. Once it's back, run the recent ones that made no incident through
+    it again (oldest first, so incidents build up in order). Returns incidents found."""
+    if not settings.get("LLM_ENABLED") or status["llm_ok"] is False:
+        return 0
+    c = db.conn()
+    rows = c.execute("SELECT * FROM transmissions WHERE status='done' AND method='rules' AND incident_id IS NULL "
+                     "AND transcript IS NOT NULL AND time_ms >= ? ORDER BY time_ms LIMIT ?",
+                     (int((time.time() - RECHECK_HOURS * 3600) * 1000), limit)).fetchall()
+    found = 0
+    for tx in rows:
+        fields, method, inc = handle_transcript(tx, tx["transcript"])
+        if method == "rules":
+            break                                   # the model went away again; next pass
+        c.execute("UPDATE transmissions SET method=?, extracted=?, is_dispatch=?, incident_id=? WHERE id=?",
+                  (method, json.dumps(fields), int(bool(fields["is_dispatch"])), inc, tx["id"]))
+        found += bool(inc)
+    if rows:
+        log.info(f"Re-checked {len(rows)} keyword-only clip(s) with the AI model: {found} incident(s) found")
+    return found
 
 
 # ─────────────────────────────────────────────

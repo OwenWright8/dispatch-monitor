@@ -311,6 +311,32 @@ def is_transport_report(transcript: str) -> bool:
                 and not _DISPATCH_TONE.search(t))
 
 
+# A tone-out: the dispatcher names the units, the call and where, then a map grid and/or
+# "tone time 1407". That's a new call even when only cross streets are given ("Accident
+# checkout, East 234th Street, cross street Cumberland Road, 55 King, tone time 1407").
+_TONE_TIME = re.compile(r"\b(?:tone ?time|time ?out|timeout)\b", re.I)
+_NOT_A_RUN = re.compile(r"\b(?:disregard|cancel(?:led|ing)?|test tones?|end of test|no run|switch to control|"
+                        r"open carrier|refer to (?:the )?md[tz])\b", re.I)
+_CROSS_ONLY = re.compile(
+    rf"\b((?:{_DIR}\s+)?(?:\d+(?:st|nd|rd|th)|[A-Z][\w'-]+)(?:\s+[A-Z][\w'-]+){{0,2}}\s+(?:{_STREET_TYPES}))\.?,?\s+"
+    rf"cross(?:\s+street|\s+of|\s+up)?,?\s+((?:{_DIR}\s+)?(?:\d+(?:st|nd|rd|th)|[A-Z][\w'-]+)(?:\s+[A-Z][\w'-]+){{0,2}}"
+    rf"(?:\s+(?:{_STREET_TYPES}))?)", re.I)
+
+
+def is_tone_out(transcript: str, units: list) -> bool:
+    t = transcript or ""
+    if not units or _NOT_A_RUN.search(t):
+        return False
+    from .geo import parse_grid
+    return bool(_TONE_TIME.search(t) or (config.PROFILE.grid_codes and parse_grid(t)))
+
+
+def cross_only_address(transcript: str) -> str | None:
+    """'East 234th Street and Cumberland Road' from '... East 234th Street, Cross Street, Cumberland Road ...'."""
+    m = _CROSS_ONLY.search(transcript or "")
+    return f"{' '.join(m.group(1).split())} and {' '.join(m.group(2).split())}" if m else None
+
+
 _BEATS_SICK_PERSON = {"Stroke", "Seizure", "Medical Alarm", "Lift Assist", "Choking", "Cardiac Arrest",
                       "Heart Problem / Blood Pressure", "Unknown Problem / Person Down"}
 
@@ -326,8 +352,18 @@ def refine(out: dict, transcript: str) -> dict:
         nature = med
     elif nature == "Sick Person" and med in _BEATS_SICK_PERSON:
         nature = med                      # "speech issues, weak" is a stroke workup, not just sick
+    elif kw == "Crash with Injuries" and category_for(nature) == "Medical":
+        nature = kw                       # "for a PI": a personal-injury crash, not a medical call
     out["nature"] = nature if nature in ALL_NATURES else "Other"
     out["units"] = list(dict.fromkeys(u for u in map(departments.clean_unit, out["units"]) if u))
+    if not out["is_dispatch"] and is_tone_out(transcript, out["units"]):
+        out["is_dispatch"] = True
+    if out["is_dispatch"] and not out["address"]:
+        # Only cross streets were given; the model sometimes files a street as the "place"
+        street_place = out["place"] and re.search(rf"\b(?:{_STREET_TYPES})\b", out["place"], re.I)
+        cross = cross_only_address(transcript) if not out["place"] or street_place else None
+        if cross:
+            out["address"], out["place"] = cross, None if street_place else out["place"]
     if out["is_dispatch"] and is_transport_report(transcript):
         out["is_dispatch"] = False
     return out
