@@ -115,3 +115,9 @@ def test_meta_lists_priority_types():
     m = client.get("/api/meta").json()
     assert "Cardiac Arrest" in m["priority"] and "unit_prefix" in m
     assert all("key" in s for s in client.get("/api/stations").json())
+
+
+def test_map_data_does_not_duplicate_listed_departments():
+    listed = {s.dept for s in config.PROFILE.stations.values()}
+    extra = [s for s in client.get("/api/stations").json() if s["key"] not in config.PROFILE.stations]
+    assert not [s for s in extra if s["dept"] in listed]

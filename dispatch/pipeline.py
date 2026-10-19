@@ -466,6 +466,7 @@ def station_point(number: str):
 def all_stations() -> list[dict]:
     """Fire stations for the map: the county profile's list, plus fire stations the map
     data names that aren't already listed (department guessed from the name)."""
+    listed_depts = {s.dept for s in config.PROFILE.stations.values()}
     out = [{"key": n, "number": s.number or n, "lat": s.lat, "lon": s.lon, "dept": s.dept, "label": s.label, "address": s.address}
            for n, s in config.PROFILE.stations.items()]
     for name, lat, lon, _ in geocoder().places.places:
@@ -480,6 +481,8 @@ def all_stations() -> list[dict]:
                                                (d.spoken or "").lower().replace(" fire", "")} if len(w) > 3)), "")
         if config.PROFILE.stations and not dept:
             continue                              # the county's own list is complete; skip neighbours' stations
+        if dept in listed_depts:
+            continue                              # e.g. a moved station still in the map data at its old spot
         m = re.search(r"\bstation\s*(?:no\.?|#)?\s*(\d{1,3})\b", name, re.I)
         out.append({"key": name, "number": m.group(1) if m else "", "lat": lat, "lon": lon, "dept": dept, "label": name,
                     "address": ""})
