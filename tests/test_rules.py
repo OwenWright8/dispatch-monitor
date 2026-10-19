@@ -158,3 +158,23 @@ def test_unit_shorthand(monkeypatch):
     assert units.same_unit("381", "381")
     assert not units.same_unit("381", "382")
     assert not units.same_unit("72", "472")
+
+
+def test_tone_out_without_house_number_is_a_dispatch():
+    # Jackson Township crash checkout: cross streets only, no house number (missed on 2026-10-19)
+    out, _ = extract.extract(departments.normalize(
+        "Medic 355, Utility 355, Accident Checkout, East 234th Street, Cross Street, Cumberland Road, 55 King, "
+        "tone time 1407."), use_llm=False)
+    assert out["is_dispatch"] and out["nature"].startswith("Crash")
+    assert out["address"] == "East 234th Street and Cumberland Road"
+    # "PI" is a personal-injury crash
+    out, _ = extract.extract("Medic 345, PI Exodus, Old Meridian Street, Cross Street, Pennsylvania Street, 41 David, "
+                             "tone time 1028.", use_llm=False)
+    assert out["is_dispatch"] and out["nature"] == "Crash with Injuries"
+    assert out["address"] == "Old Meridian Street and Pennsylvania Street"
+
+
+def test_cancellations_and_tests_are_not_dispatches():
+    for t in ("Station 84, test tones only. Station 84, test tones only. No run, 1931.",
+              "Ladder 81, Medic 382, disregard this call. Ladder 81, Medic 382, disregard this call. 0443."):
+        assert not extract.extract(t, use_llm=False)[0]["is_dispatch"]

@@ -495,7 +495,7 @@ const deptBadges = list => (list || []).length
   ? `<div class="depts">${list.map(d => `<span class="dept" style="--dc:${deptColor(d)}">${esc(d)}</span>`).join("")}</div>` : "";
 
 // Life-threatening call types (api/meta) get a red ring; each category gets a small glyph
-let PRIORITY = new Set(), UNIT_PREFIX = "";
+let PRIORITY = new Set(), UNIT_PREFIX = "", UNIT_STATUS = true;   // UNIT_STATUS: units report en route / on scene on the radio
 const isPrio = i => PRIORITY.has(i.nature);
 const GLYPH = {
   Medical: '<path d="M4.5 1h3v3.5H11v3H7.5V11h-3V7.5H1v-3h3.5z"/>',
@@ -843,7 +843,7 @@ const CONF = { confirmed: "confirmed by cross streets", high: "matches the depar
 const USTAT_COLOR = { "dispatched": "--muted", "en route": "--c-traffic", "on scene": "--stale", "transporting": "--c-medical",
   "at hospital": "--c-medical", "cleared": "--c-rescue", "on another call": "--c-service", "out of service": "--c-other" };
 function unitBars(i) {
-  const tl = i.timeline || []; if (!tl.length) return "";
+  const tl = (i.timeline || []).filter(e => UNIT_STATUS || e.status !== "dispatched"); if (!tl.length) return "";
   const t0 = Math.min(i.first_ms, ...tl.map(e => e.time_ms));
   const t1 = Math.max(t0 + 5 * 60000, ...tl.map(e => e.time_ms + 3 * 60000));
   const x = t => ((t - t0) / (t1 - t0) * 100).toFixed(2);
@@ -1365,11 +1365,13 @@ async function loadStatus() {
     // A banner under the header whenever new calls may be delayed
     const banner = document.getElementById("feedBanner");
     const since = s.last_poll ? ` (last good check ${hm(s.last_poll * 1000)})` : "";
-    const soft = !s.last_poll || (healing && s.poll_failures < 20);
+    const soft = !healing || s.poll_failures < 20;
+    const why = /cloudflare/i.test(s.last_poll_error || "") ? " (OpenMHz is asking for a browser check; trying other browser identities)" : "";
     banner.className = fresh ? "" : soft ? "on" : "on down";
-    banner.textContent = fresh ? "" : !s.last_poll ? "Connecting to the radio feed…"
-      : soft ? `Reconnecting to the radio feed${retryIn != null ? ` (retry in ${retryIn}s)` : ""}. New calls may be delayed.`
-      : `The radio feed is down${since}. The monitor keeps retrying; calls shown may be out of date.`;
+    banner.textContent = fresh ? ""
+      : !healing ? "Connecting to the radio feed…"
+      : soft ? `Reconnecting to the radio feed${why}${retryIn != null ? `, next try in ${retryIn}s` : ""}. New calls may be delayed.`
+      : `The radio feed is down${since}${why}. The monitor keeps retrying; calls shown may be out of date.`;
     const llm = !s.llm.enabled ? "rules only"
       : (s.llm.error || "").startsWith("Downloading") ? `${s.llm.error}…`
       : s.llm.ok === false ? `AI model offline (keyword rules)` : s.llm.model;
@@ -1390,16 +1392,24 @@ async function loadActive() {
   const el = document.getElementById("active");
   let list = [];
   try { list = await fetch("api/active").then(r => r.json()); } catch { return; }
-  document.getElementById("activeBadge").textContent = list.filter(i => !i.quiet).length || "";
+  document.getElementById("activeBadge").textContent = list.filter(i => !(UNIT_STATUS && i.quiet)).length || "";
   if (!list.length) { el.innerHTML = `<div class="act-empty">No active calls right now.</div>`; return; }
   el.innerHTML = `<div class="act-head"><span class="dot"></span>Active now · ${list.length}</div>` + list.map(i => {
     const units = [...i.units].sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status));
-    return `<div class="act ${i.quiet ? "quiet" : ""}" data-id="${i.id}" style="--c:${catColor(i.category)}">
+    const quiet = UNIT_STATUS && i.quiet;        // without radio status reports, silence means nothing
+    return `<div class="act ${quiet ? "quiet" : ""}" data-id="${i.id}" style="--c:${catColor(i.category)}">
       <div class="t1">${esc(i.nature)}${isPrio(i) ? `<span class="prio-badge">PRIORITY</span>` : ""}
         <span style="color:var(--muted);font-weight:400"> · ${hm(i.first_ms)} · ${ago(i.first_ms)}</span>
-        ${i.quiet ? `<span class="quiet-note"> · quiet ${ago(i.last_activity_ms)}, likely wrapping up</span>` : ""}</div>
+        ${quiet ? `<span class="quiet-note"> · quiet ${ago(i.last_activity_ms)}, likely wrapping up</span>`
+          : !UNIT_STATUS && i.ends_ms ? `<span class="quiet-note" title="Units clear on the CAD, not the radio, so this is an estimate from the call type"> · usually done by ~${hm(i.ends_ms)}</span>` : ""}</div>
       <div class="t2">${esc(i.matched || i.address || i.place || "Location unknown")}</div>
-      <div>${units.map(u => `<span class="ustat s-${u.status.replace(/ /g, "-")}" title="${esc(u.status)} since ${hm(u.since_ms)}"><i></i>${esc(u.unit)} · ${esc(u.status)}</span>`).join("")}</div>
+      <div>${units.map(u => {
+        // Where units don't call in their status (they use the CAD), only show what's certain
+        const known = UNIT_STATUS || !["dispatched", "en route", "on scene"].includes(u.status);
+        return known
+          ? `<span class="ustat s-${u.status.replace(/ /g, "-")}" title="${esc(u.status)} since ${hm(u.since_ms)}"><i></i>${esc(u.unit)} · ${esc(u.status)}</span>`
+          : `<span class="ustat" title="Sent ${hm(i.first_ms)}">${esc(u.unit)}</span>`;
+      }).join("")}</div>
     </div>`;
   }).join("");
 }
@@ -1428,7 +1438,7 @@ function renderAll() { if (view === "mapView") { renderFeed(); renderMap(); } el
     META = m;
     fetch("api/settings").then(r => r.json()).then(s => { META.locked = s.locked; }).catch(() => {});
     cartoKey = m.carto_key;
-    PRIORITY = new Set(m.priority || []); UNIT_PREFIX = m.unit_prefix || "";
+    PRIORITY = new Set(m.priority || []); UNIT_PREFIX = m.unit_prefix || ""; UNIT_STATUS = m.unit_status !== false;
     const c = m.county || {};
     if (c.title) { document.getElementById("title").textContent = c.title; document.title = c.title; }
     if (c.subtitle) document.getElementById("channelsLine").textContent = c.subtitle;

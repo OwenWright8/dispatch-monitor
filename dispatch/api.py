@@ -105,7 +105,7 @@ def meta():
     known = {d["name"] for d in depts}
     depts += [{"name": a, "kind": "other", "area": ""} for a in sorted(seen - known)]
     return {"categories": CATEGORIES, "taxonomy": TAXONOMY, "priority": PRIORITY,
-            "unit_prefix": p.unit_shorthand_prefix,
+            "unit_prefix": p.unit_shorthand_prefix, "unit_status": p.radio_unit_status,
             "county": {"key": p.key, "name": p.name, "state": p.state, "title": p.title, "subtitle": p.subtitle,
                        "center": p.center, "zoom": p.zoom, "bbox": p.bbox},
             "departments": depts,
