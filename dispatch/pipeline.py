@@ -466,7 +466,7 @@ def station_point(number: str):
 def all_stations() -> list[dict]:
     """Fire stations for the map: the county profile's list, plus fire stations the map
     data names that aren't already listed (department guessed from the name)."""
-    out = [{"number": n, "lat": s.lat, "lon": s.lon, "dept": s.dept, "label": s.label, "address": s.address}
+    out = [{"number": s.number or n, "lat": s.lat, "lon": s.lon, "dept": s.dept, "label": s.label, "address": s.address}
            for n, s in config.PROFILE.stations.items()]
     for name, lat, lon, _ in geocoder().places.places:
         low = name.lower()

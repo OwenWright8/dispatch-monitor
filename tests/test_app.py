@@ -91,7 +91,7 @@ def test_pages_load(path):
 
 def test_stations_endpoint_lists_profile_stations():
     got = client.get("/api/stations").json()
-    listed = {s["number"] for s in got}
-    assert set(config.PROFILE.stations) <= listed
+    listed = {(s["lat"], s["lon"]) for s in got}
+    assert {(s.lat, s.lon) for s in config.PROFILE.stations.values()} <= listed
     for s in got:
         assert config.COUNTY_BBOX[0] <= s["lat"] <= config.COUNTY_BBOX[2]

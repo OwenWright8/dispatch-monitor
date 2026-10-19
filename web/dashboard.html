@@ -110,7 +110,8 @@ main { flex: 1; min-height: 0; display: flex; }
 .map-toggle { background: var(--surface); box-shadow: 0 1px 4px rgba(0,0,0,.15); border-radius: 7px; padding: 4px 9px; }
 .station-icon { width: 22px; height: 22px; border-radius: 5px; background: var(--c-fire); color: #fff; font: 700 10px/22px var(--sans);
   text-align: center; box-shadow: 0 0 0 2px var(--surface), 0 1px 4px rgba(0,0,0,.35); }
-.station-icon.ems { background: var(--c-medical); }
+#stationLegend:empty { display: none; }
+.legend .sq { width: 10px; height: 10px; border-radius: 3px; flex: none; }
 .legend { background: var(--surface); border-radius: 8px; padding: 8px 10px; box-shadow: 0 1px 4px rgba(0,0,0,.15); font-size: 12px; display: grid; gap: 3px; }
 .legend div { display: flex; align-items: center; gap: 6px; color: var(--ink-2); }
 .legend .sw { width: 9px; height: 9px; border-radius: 50%; }
@@ -311,6 +312,7 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
         <div class="seg" id="modeSeg"><button data-mode="dots" class="on">Incidents</button><button data-mode="heat">Heatmap</button></div>
         <label class="toggle map-toggle"><input type="checkbox" id="stationsToggle"> Fire stations</label>
         <div class="legend" id="mapLegend"></div>
+        <div class="legend" id="stationLegend"></div>
       </div>
     </div>
   </section>
@@ -492,17 +494,27 @@ document.getElementById("modeSeg").addEventListener("click", e => {
 });
 map.on("moveend", () => { if (F.bbox) refresh(); });
 
-// Fire stations layer (with their station numbers), remembered between visits
+// Fire stations layer (with their station numbers), colored by department and
+// remembered between visits
 const stationLayer = L.layerGroup();
-let stationsLoaded = false;
+const STATION_COLORS = ["#d62728", "#1f77b4", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b", "#e377c2", "#17becf",
+  "#bcbd22", "#393b79", "#637939", "#ad494a", "#7f7f7f", "#e6550d", "#3182bd", "#31a354"];
+let stationsLoaded = false, stationLegendHtml = "";
 async function showStations(on) {
   store.set("stations", on);
-  if (!on) { map.removeLayer(stationLayer); return; }
+  const legendEl = document.getElementById("stationLegend");
+  if (!on) { map.removeLayer(stationLayer); legendEl.innerHTML = ""; return; }
   if (!stationsLoaded) {
     const list = await fetch("api/stations").then(r => r.json()).catch(() => []);
+    // One color per department, in the county's department order
+    const order = Object.keys(DEPT_KIND);
+    const depts = [...new Set(list.map(s => s.dept || "Other"))]
+      .sort((a, b) => (order.indexOf(a) + 1 || 999) - (order.indexOf(b) + 1 || 999));
+    const color = d => STATION_COLORS[depts.indexOf(d || "Other") % STATION_COLORS.length];
+    stationLegendHtml = depts.map(d => `<div><span class="sq" style="background:${color(d)}"></span>${esc(d)}</div>`).join("");
     for (const s of list) {
       const icon = L.divIcon({ className: "", iconSize: [22, 22], iconAnchor: [11, 11],
-        html: `<div class="station-icon ${DEPT_KIND[s.dept] === "ems" ? "ems" : ""}">${esc(s.number || "FD")}</div>` });
+        html: `<div class="station-icon" style="background:${color(s.dept)}">${esc(s.number || "FD")}</div>` });
       const m = L.marker([s.lat, s.lon], { icon, keyboard: false, zIndexOffset: -1000 });
       const tip = `<b>${esc(s.label)}</b>${s.dept ? `<div class="m">${esc(s.dept)}</div>` : ""}${s.address ? `<div class="m">${esc(s.address)}</div>` : ""}`;
       m.on("mouseover", ev => showTip(ev.originalEvent, tip));
@@ -511,6 +523,7 @@ async function showStations(on) {
     }
     stationsLoaded = true;
   }
+  legendEl.innerHTML = stationLegendHtml;
   stationLayer.addTo(map);
 }
 document.getElementById("stationsToggle").addEventListener("change", e => showStations(e.target.checked));
