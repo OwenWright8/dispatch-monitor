@@ -7,6 +7,8 @@
 <link rel="stylesheet" href="lib/leaflet.css">
 <script src="lib/leaflet.js"></script>
 <script src="lib/leaflet-heat.js"></script>
+<link rel="stylesheet" href="lib/MarkerCluster.css">
+<script src="lib/leaflet.markercluster.js"></script>
 <style>
 :root {
   color-scheme: light;
@@ -94,11 +96,11 @@ main { flex: 1; min-height: 0; display: flex; }
 .feed { width: 360px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--surface); border-right: 1px solid var(--grid); min-height: 0; }
 .feed-head { padding: 10px 14px; display: flex; justify-content: space-between; color: var(--ink-2); font-size: 12px; border-bottom: 1px solid var(--grid); }
 .feed-list { overflow-y: auto; flex: 1; }
-.item { display: flex; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--grid); cursor: pointer; }
-.item:hover { background: var(--surface-2); }
-.item .sw { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; box-shadow: 0 0 0 2px var(--surface); }
-.item .sw.approx { background: transparent !important; border: 2px solid; }
-.item .t1 { font-weight: 600; }
+.item { display: flex; gap: 10px; padding: 10px 14px 10px 12px; border-bottom: 1px solid var(--grid); cursor: pointer;
+  border-left: 4px solid var(--c, var(--c-other)); }
+.item:hover, .item.hl { background: var(--surface-2); }
+.item.sel { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.item .t1 { font-weight: 650; font-size: 14.5px; }
 .item .t2 { color: var(--ink-2); font-size: 13px; }
 .item .t3 { color: var(--muted); font-size: 12px; }
 .item .body { min-width: 0; flex: 1; }
@@ -110,7 +112,8 @@ main { flex: 1; min-height: 0; display: flex; }
 .map-toggle { background: var(--surface); box-shadow: 0 1px 4px rgba(0,0,0,.15); border-radius: 7px; padding: 4px 9px; }
 .station-icon { width: 22px; height: 22px; border-radius: 5px; background: var(--c-fire); color: #fff; font: 700 10px/22px var(--sans);
   text-align: center; box-shadow: 0 0 0 2px var(--surface), 0 1px 4px rgba(0,0,0,.35); }
-.station-icon.ems { background: var(--c-medical); }
+#stationLegend:empty { display: none; }
+.legend .sq { width: 10px; height: 10px; border-radius: 3px; flex: none; }
 .legend { background: var(--surface); border-radius: 8px; padding: 8px 10px; box-shadow: 0 1px 4px rgba(0,0,0,.15); font-size: 12px; display: grid; gap: 3px; }
 .legend div { display: flex; align-items: center; gap: 6px; color: var(--ink-2); }
 .legend .sw { width: 9px; height: 9px; border-radius: 50%; }
@@ -208,9 +211,7 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 
 /* department badges */
 .depts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
-.dept { font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 4px; background: var(--surface-2); color: var(--ink-2); white-space: nowrap; box-shadow: inset 2px 0 0 var(--c-other); }
-.dept.ems { box-shadow: inset 2px 0 0 var(--c-medical); }
-.dept.fire { box-shadow: inset 2px 0 0 var(--c-fire); }
+.dept { font-size: 11px; line-height: 16px; padding: 0 6px 0 8px; border-radius: 4px; background: var(--surface-2); color: var(--ink-2); white-space: nowrap; box-shadow: inset 3px 0 0 var(--dc, var(--c-other)); }
 .item .body .depts { white-space: normal; }
 .new-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; color: var(--surface); background: var(--stale); border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: 1px; }
 .item.fresh { background: color-mix(in srgb, var(--stale) 6%, transparent); }
@@ -220,8 +221,12 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .act-head { padding: 8px 14px; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
   color: var(--stale); display: flex; gap: 6px; align-items: center; }
 .act-head .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--stale); animation: pulse-dot 1.2s ease-in-out infinite; }
-.act { padding: 8px 14px; border-top: 1px solid var(--grid); cursor: pointer; }
+.act { padding: 8px 14px 8px 12px; border-top: 1px solid var(--grid); cursor: pointer; border-left: 4px solid var(--c, var(--c-other)); }
 .act:hover { background: var(--surface-2); }
+.act.quiet { opacity: .55; }
+.act .quiet-note { color: var(--muted); font-size: 11px; font-weight: 400; }
+.act-empty { padding: 32px 16px; color: var(--muted); text-align: center; }
+#active:has(> .act-empty) { border-bottom: 0; }
 .act .t1 { font-weight: 600; font-size: 13px; }
 .act .t2 { color: var(--ink-2); font-size: 12px; }
 .ustat { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; padding: 1px 6px; border-radius: 4px;
@@ -231,6 +236,8 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .ustat.s-on-scene i { background: var(--stale); }
 .ustat.s-transporting i, .ustat.s-at-hospital i { background: var(--c-medical); }
 .ustat.s-cleared i { background: var(--c-rescue); }
+.ustat.s-on-another-call { opacity: .7; }
+.ustat.s-on-another-call i { background: var(--c-service); }
 .tl { font-size: 13px; display: grid; grid-template-columns: 70px 1fr; gap: 2px 10px; }
 .tl .when { color: var(--muted); font-variant-numeric: tabular-nums; }
 .day-sep { position: sticky; top: 0; z-index: 1; background: var(--surface-2); color: var(--ink-2); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: 4px 14px; border-bottom: 1px solid var(--grid); }
@@ -242,8 +249,47 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .leaflet-container { font: 13px var(--sans); }
 .heat-scale { display: flex; align-items: center; gap: 6px; }
 .heat-scale i { display: block; width: 90px; height: 8px; border-radius: 4px; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .osm .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.85) saturate(.6); } }
-:root[data-theme="dark"] .osm .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.85) saturate(.6); }
+/* OSM tiles inverted for the dark map; CARTO's dark labels brightened so street names read */
+.osm-dark .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.95) contrast(.9) saturate(.5); }
+.leaflet-labels-pane { pointer-events: none; }
+.bright-labels .leaflet-labels-pane { filter: brightness(1.9) contrast(1.15); }
+
+/* incident pins: category color, a glyph for the call type, a red ring for priority calls */
+.pin { width: 18px; height: 18px; border-radius: 50%; background: var(--c); color: #fff; display: grid; place-items: center;
+  box-shadow: 0 0 0 2px var(--surface), 0 1px 3px rgba(0,0,0,.4); transition: transform .12s; }
+.pin svg { width: 10px; height: 10px; fill: currentColor; }
+.pin.approx { background: color-mix(in srgb, var(--c) 30%, var(--surface)); color: var(--c); box-shadow: 0 0 0 2px var(--c); }
+.pin.prio { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--stale), 0 1px 4px rgba(0,0,0,.4); }
+.pin.fresh { animation: pulse 1.6s ease-out infinite; }
+.pin.hl, .cluster.hl { transform: scale(1.5); z-index: 1000; }
+.cluster { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font: 700 12px var(--sans);
+  background: var(--surface); color: var(--ink); box-shadow: 0 0 0 3px var(--c), 0 1px 5px rgba(0,0,0,.4); transition: transform .12s; }
+.cluster { position: relative; }
+.cluster.prio::after { content: ""; position: absolute; top: -3px; right: -3px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--stale); box-shadow: 0 0 0 2px var(--surface); }
+.map-ctl select { background: var(--surface); box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+
+/* feed banner when the radio feed is down */
+#feedBanner { display: none; padding: 6px 16px; font-size: 13px; font-weight: 600; color: #fff; background: var(--c-traffic); }
+#feedBanner.on { display: block; }
+#feedBanner.down { background: var(--stale); }
+
+/* call details */
+#miniMap { height: 170px; border-radius: 8px; margin: 0 0 12px; background: var(--surface-2); }
+.playall { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.tx.playing { box-shadow: inset 3px 0 0 var(--accent); padding-left: 10px; }
+.ubars { display: grid; grid-template-columns: 96px 1fr; gap: 4px 8px; align-items: center; font-size: 12px; }
+.ubars .u { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ubars .track { position: relative; height: 14px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.ubars .seg { position: absolute; top: 0; bottom: 0; }
+.ubars .axis { grid-column: 2; display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.ukey { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-top: 6px; }
+.ukey i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.prio-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; color: var(--stale); border: 1px solid var(--stale); border-radius: 4px; padding: 0 4px; margin-left: 6px; vertical-align: 1px; }
+.approx-tag { color: var(--muted); font-size: 11px; }
+
+/* phone navigation (shown under 700px) */
+#mnav, #filtersBtn, .act-empty { display: none; }
 
 @media (max-width: 900px) {
   body { overflow: auto; }
@@ -262,6 +308,40 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
   header .spacer { display: none; }
   #statsView { overflow-x: hidden; }
 }
+
+/* Phones: compact header, filters behind a button, and one screen at a time
+   (Active · Calls · Map · Stats) picked from a bottom bar. */
+@media (max-width: 700px) {
+  body { overflow: hidden; }
+  header { padding: 8px 12px; gap: 8px; flex-wrap: nowrap; }
+  header h1 { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  header > div:first-child { min-width: 0; flex: 1; }
+  #channelsLine, #pipelineText, header .tabs { display: none; }
+  header .spacer { display: none; }
+  #filtersBtn { display: inline-block; }
+  .heard { display: none; }
+  .filters { display: none; }
+  body.show-filters .filters { display: flex; }
+  .filters input[type=search], .filters #agencySel { width: 100%; max-width: 100%; }
+  main { min-height: 0; }
+  #mapView { flex-direction: column; }
+  .feed { width: 100%; max-height: none; flex: 1; border-right: 0; }
+  .mapwrap { display: none; height: auto; flex: 1; }
+  body[data-mtab="map"] .feed { display: none; }
+  body[data-mtab="map"] .mapwrap { display: block; }
+  body[data-mtab="active"] .feed-head, body[data-mtab="active"] #feed { display: none; }
+  body[data-mtab="active"] #active { max-height: none; flex: 1; border-bottom: 0; display: block; }
+  body[data-mtab="active"] .act-empty { display: block; }
+  body[data-mtab="calls"] #active { display: none; }
+  .map-ctl .legend { display: none; }
+  #mnav { display: flex; border-top: 1px solid var(--grid); background: var(--surface); padding-bottom: env(safe-area-inset-bottom); }
+  #mnav button { flex: 1; border: 0; background: none; padding: 9px 0 10px; font-size: 12px; color: var(--muted); cursor: pointer; position: relative; }
+  #mnav button.on { color: var(--accent); font-weight: 650; }
+  #mnav .badge { position: absolute; top: 4px; margin-left: 2px; font-size: 10px; min-width: 16px; line-height: 16px; border-radius: 8px;
+    background: var(--stale); color: #fff; padding: 0 4px; }
+  #mnav .badge:empty { display: none; }
+  .item { padding: 12px 14px; }
+}
 </style>
 </head>
 <body>
@@ -273,18 +353,15 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
   </div>
   <span class="pill" id="statusPill"><span class="dot"></span><span id="statusText">Connecting…</span></span>
   <span class="sub" id="pipelineText"></span>
-  <span class="backfill">
-    <select id="bfHours" aria-label="How far back"><option value="24">24 h</option><option value="72">3 days</option><option value="168">7 days</option></select>
-    <button class="btn" id="bfBtn" title="Fetch and transcribe past calls. Live calls are always handled first.">Load past calls</button>
-  </span>
   <div class="spacer"></div>
-  <a class="btn" id="csvBtn" href="#" download>Export CSV</a>
-  <button class="btn" id="settingsBtn" title="Change how the monitor works">Settings</button>
+  <button class="btn" id="filtersBtn" aria-expanded="false">Filters</button>
+  <button class="btn" id="settingsBtn" title="Settings, past calls and CSV export">Settings</button>
   <div class="tabs" role="tablist">
     <button class="on" data-view="mapView" role="tab">Map</button>
     <button data-view="statsView" role="tab">Statistics</button>
   </div>
 </header>
+<div id="feedBanner" role="status"></div>
 
 <div class="filters">
   <div class="seg" id="rangeSeg">
@@ -309,8 +386,11 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
       <div id="map"></div>
       <div class="map-ctl">
         <div class="seg" id="modeSeg"><button data-mode="dots" class="on">Incidents</button><button data-mode="heat">Heatmap</button></div>
+        <select id="baseSel" aria-label="Map style"><option value="auto">Map: auto</option><option value="dark">Dark</option>
+          <option value="light">Light</option><option value="satellite">Satellite</option></select>
         <label class="toggle map-toggle"><input type="checkbox" id="stationsToggle"> Fire stations</label>
         <div class="legend" id="mapLegend"></div>
+        <div class="legend" id="stationLegend"></div>
       </div>
     </div>
   </section>
@@ -365,6 +445,13 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
   </section>
 </main>
 
+<nav id="mnav" aria-label="Screens">
+  <button data-mtab="active">Active<span class="badge" id="activeBadge"></span></button>
+  <button data-mtab="calls">Calls</button>
+  <button data-mtab="map">Map</button>
+  <button data-mtab="stats">Stats</button>
+</nav>
+
 <div class="backdrop" id="modal"><div class="modal" id="modalBody"></div></div>
 <div id="tip"></div>
 
@@ -374,10 +461,13 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 // ─────────────────────────────────────────────
 const CATS = ["Medical", "Fire", "Alarm", "Traffic", "Hazmat", "Rescue", "Service", "Other"];
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const F = { days: 1, cats: new Set(), agency: "", q: "", hours: new Set(), dows: new Set(), natures: new Set(), bbox: false };
+const F = { days: 1, cats: new Set(), agency: "", q: "", hours: new Set(), dows: new Set(), natures: new Set(), bbox: false,
+  station: null };                        // station: {key, label} (clicked on the map; filters in the browser)
 let mode = "dots", view = "mapView", incidents = [], lastIds = "";
 let DEPT_KIND = {};                       // department name -> fire | ems | rescue | other (from api/meta)
 const FRESH_MS = 15 * 60 * 1000;          // "new" badge / pulsing marker
+const mq = matchMedia("(max-width: 700px)");   // phone layout (bottom bar, one screen at a time)
+const showMap = () => mq.matches ? setMTab("map") : switchView("mapView");
 
 // Remember range, map mode and department between visits (per browser; optional).
 const store = {
@@ -390,8 +480,34 @@ const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).
 const catColor = c => css("--c-" + (c || "other").toLowerCase()) || css("--c-other");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmtN = n => n >= 10000 ? (n / 1000).toFixed(1).replace(/\.0$/, "") + "K" : n.toLocaleString();
+// 24-hour clock everywhere ("14:05", "14:05:32")
+const hm = ms => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const hms = ms => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+const hh = h => String(h).padStart(2, "0");
+const ago = ms => { const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}`; };
+
+// One color per department, in the county's department order: station pins, legend and badges match
+const DEPT_COLORS = ["#d62728", "#1f77b4", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b", "#e377c2", "#17becf",
+  "#bcbd22", "#393b79", "#637939", "#ad494a", "#7f7f7f", "#e6550d", "#3182bd", "#31a354"];
+const deptColor = d => { const i = Object.keys(DEPT_KIND).indexOf(d); return i < 0 ? css("--c-other") : DEPT_COLORS[i % DEPT_COLORS.length]; };
 const deptBadges = list => (list || []).length
-  ? `<div class="depts">${list.map(d => `<span class="dept ${DEPT_KIND[d] || "other"}">${esc(d)}</span>`).join("")}</div>` : "";
+  ? `<div class="depts">${list.map(d => `<span class="dept" style="--dc:${deptColor(d)}">${esc(d)}</span>`).join("")}</div>` : "";
+
+// Life-threatening call types (api/meta) get a red ring; each category gets a small glyph
+let PRIORITY = new Set(), UNIT_PREFIX = "";
+const isPrio = i => PRIORITY.has(i.nature);
+const GLYPH = {
+  Medical: '<path d="M4.5 1h3v3.5H11v3H7.5V11h-3V7.5H1v-3h3.5z"/>',
+  Fire: '<path d="M6 .5C6.5 3 9.5 4.5 9.5 7.5a3.5 3.5 0 0 1-7 0C2.5 6 3.3 5 4 4.3c0 1.2.6 2 1.3 2.2C5 4.6 5.3 2.3 6 .5z"/>',
+  Alarm: '<path d="M6 1a3.5 3.5 0 0 0-3.5 3.5V7L1.5 9h9L9.5 7V4.5A3.5 3.5 0 0 0 6 1zm-1.3 9a1.3 1.3 0 0 0 2.6 0z"/>',
+  Traffic: '<path fill-rule="evenodd" d="M3 2.5h6l1.5 3.5v4H9V9H3v1H1.5V6zM3.6 3.7 2.8 5.7h6.4l-.8-2zM3 6.6a.8.8 0 1 0 0 1.6.8.8 0 0 0 0-1.6zm6 0a.8.8 0 1 0 0 1.6.8.8 0 0 0 0-1.6z"/>',
+  Hazmat: '<path fill-rule="evenodd" d="M6 1 11.5 10.5H.5zM5.3 4.5h1.4v3H5.3zm0 3.8h1.4v1.3H5.3z"/>',
+  Rescue: '<path fill-rule="evenodd" d="M6 1a5 5 0 1 0 0 10A5 5 0 0 0 6 1zm0 2.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5z"/>',
+  Service: '<path d="M9.8 1.2 8 3l.1 1 1 .1 1.8-1.8a3 3 0 0 1-3.9 3.9L3 10.2A1.2 1.2 0 0 1 1.8 9L5.8 5A3 3 0 0 1 9.8 1.2z"/>',
+  Other: '<circle cx="6" cy="6" r="2.2"/>',
+};
+const glyph = c => `<svg viewBox="0 0 12 12" aria-hidden="true">${GLYPH[c] || GLYPH.Other}</svg>`;
 
 function qs(extra = {}) {
   const p = new URLSearchParams();
@@ -411,15 +527,22 @@ const api = (path, extra) => fetch(`api/${path}?${qs(extra)}`).then(r => { if (!
 // ─────────────────────────────────────────────
 // Filters UI
 // ─────────────────────────────────────────────
+// Category chips: click to add or remove a category, double-click for only that one, "All" to reset
 function buildCatChips() {
-  document.getElementById("catChips").innerHTML = CATS.map(c => {
+  document.getElementById("catChips").innerHTML =
+    `<button class="chip ${F.cats.size ? "" : "on"}" data-cat="" title="Show every category">All</button>` + CATS.map(c => {
     const st = F.cats.size === 0 ? "" : F.cats.has(c) ? "on" : "off";
-    return `<button class="chip ${st}" data-cat="${c}"><span class="sw" style="background:${catColor(c)}"></span>${c}</button>`;
+    return `<button class="chip ${st}" data-cat="${c}" title="Click to add or remove; double-click for only ${c}"><span class="sw" style="background:${catColor(c)}"></span>${c}</button>`;
   }).join("");
 }
 document.getElementById("catChips").addEventListener("click", e => {
   const b = e.target.closest("[data-cat]"); if (!b) return;
-  toggleSet(F.cats, b.dataset.cat); buildCatChips(); refresh();
+  if (!b.dataset.cat) F.cats.clear(); else toggleSet(F.cats, b.dataset.cat);
+  buildCatChips(); refresh();
+});
+document.getElementById("catChips").addEventListener("dblclick", e => {
+  const b = e.target.closest("[data-cat]"); if (!b || !b.dataset.cat) return;
+  F.cats.clear(); F.cats.add(b.dataset.cat); buildCatChips(); refresh();
 });
 document.getElementById("rangeSeg").addEventListener("click", e => {
   const b = e.target.closest("[data-days]"); if (!b) return;
@@ -437,24 +560,41 @@ function toggleSet(s, v) { s.has(v) ? s.delete(v) : s.add(v); }
 function renderActiveFilters() {
   const tags = [];
   if (F.dows.size) tags.push(["dows", [...F.dows].sort().map(d => DOW[d]).join(", ")]);
-  if (F.hours.size) tags.push(["hours", [...F.hours].sort((a, b) => a - b).map(h => `${h}:00`).join(", ")]);
+  if (F.hours.size) tags.push(["hours", [...F.hours].sort((a, b) => a - b).map(h => `${hh(h)}:00`).join(", ")]);
   if (F.natures.size) tags.push(["natures", [...F.natures].join(", ")]);
+  if (F.station) tags.push(["station", `${F.station.label} calls`]);
   document.getElementById("activeFilters").innerHTML = tags.map(([k, label]) =>
     `<span class="tag">${esc(label)}<button data-clear="${k}" aria-label="Clear">×</button></span>`).join("");
 }
 document.getElementById("activeFilters").addEventListener("click", e => {
   const b = e.target.closest("[data-clear]"); if (!b) return;
-  F[b.dataset.clear].clear(); refresh();
+  if (b.dataset.clear === "station") F.station = null; else F[b.dataset.clear].clear();
+  refresh();
 });
 
-document.querySelector(".tabs").addEventListener("click", e => {
-  const b = e.target.closest("[data-view]"); if (!b) return;
-  view = b.dataset.view;
+function switchView(v) {
+  view = v;
   history.replaceState(null, "", view === "statsView" ? "#stats" : "#map");
-  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
-  document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === view));
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x.dataset.view === v));
+  document.querySelectorAll(".view").forEach(el => el.classList.toggle("on", el.id === view));
   if (view === "mapView") setTimeout(() => map.invalidateSize(), 0);
   refresh();
+}
+document.querySelector(".tabs").addEventListener("click", e => {
+  const b = e.target.closest("[data-view]"); if (b) switchView(b.dataset.view);
+});
+
+// Phones: bottom bar picks one screen (Active · Calls · Map · Stats); filters fold behind a button
+function setMTab(t) {
+  document.body.dataset.mtab = t; store.set("mtab", t);
+  document.querySelectorAll("#mnav button").forEach(x => x.classList.toggle("on", x.dataset.mtab === t));
+  const v = t === "stats" ? "statsView" : "mapView";
+  if (v !== view) switchView(v); else if (t === "map") setTimeout(() => map.invalidateSize(), 0);
+}
+document.getElementById("mnav").addEventListener("click", e => { const b = e.target.closest("[data-mtab]"); if (b) setMTab(b.dataset.mtab); });
+document.getElementById("filtersBtn").addEventListener("click", e => {
+  const on = document.body.classList.toggle("show-filters");
+  e.currentTarget.setAttribute("aria-expanded", on);
 });
 
 // ─────────────────────────────────────────────
@@ -464,21 +604,43 @@ const map = L.map("map", { center: [40.4167, -86.8753], zoom: 12, preferCanvas: 
 // Leaflet measures its container once; re-measure whenever layout changes it
 // (first paint, window resize, mobile rotation) so tiles fill the whole map.
 new ResizeObserver(() => map.invalidateSize()).observe(document.getElementById("map"));
-// CARTO basemaps when CARTO_API_KEY is configured (dark/light follow the theme);
-// otherwise standard OSM tiles, inverted in CSS for dark mode (.osm .leaflet-tile-pane).
+// Map style: "auto" follows the page theme; dark, light or satellite on request (remembered).
+// CARTO tiles when CARTO_API_KEY is configured, otherwise OSM (inverted in CSS for dark).
+// Dark CARTO draws its labels in their own pane, brightened so street names stay readable.
 const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+const CARTO_ATTR = OSM_ATTR + ' &copy; <a href="https://carto.com/attributions">CARTO</a>';
+const ESRI_ATTR = 'Imagery &copy; Esri, Maxar, Earthstar Geographics';
 const isDark = () => document.documentElement.dataset.theme === "dark" ||
   (document.documentElement.dataset.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
-let tiles = null, cartoKey = null;
-function setBasemap() {
-  if (tiles) map.removeLayer(tiles);
-  map.getContainer().classList.toggle("osm", !cartoKey);
-  tiles = cartoKey
-    ? L.tileLayer(`https://{s}.basemaps.cartocdn.com/${isDark() ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png?key=${encodeURIComponent(cartoKey)}`,
-        { attribution: OSM_ATTR + ' &copy; <a href="https://carto.com/attributions">CARTO</a>', subdomains: "abcd", maxZoom: 19 })
-    : L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: OSM_ATTR, maxZoom: 19 });
-  tiles.addTo(map);
+let cartoKey = null, basemap = store.get("basemap", "auto");
+function baseLayers() {
+  const style = basemap === "auto" ? (isDark() ? "dark" : "light") : basemap;
+  const carto = name => L.tileLayer(`https://{s}.basemaps.cartocdn.com/${name}/{z}/{x}/{y}{r}.png?key=${encodeURIComponent(cartoKey)}`,
+    { attribution: CARTO_ATTR, subdomains: "abcd", maxZoom: 19 });
+  if (style === "satellite") return { style, layers: [
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { attribution: ESRI_ATTR, maxZoom: 19 }),
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, opacity: .7 }),
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19 }),
+  ] };
+  if (!cartoKey) return { style, osmDark: style === "dark",
+    layers: [L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: OSM_ATTR, maxZoom: 19 })] };
+  if (style === "dark") return { style, labels: true, layers: [carto("dark_nolabels"),
+    L.tileLayer(`https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png?key=${encodeURIComponent(cartoKey)}`,
+      { subdomains: "abcd", maxZoom: 19, pane: "labels" })] };
+  return { style, layers: [carto("voyager")] };
 }
+function applyBase(m, prev) {
+  (prev || []).forEach(l => m.removeLayer(l));
+  if (!m.getPane("labels")) m.createPane("labels").style.zIndex = 350;      // above tiles, under incident pins
+  const b = baseLayers();
+  m.getContainer().classList.toggle("osm-dark", !!b.osmDark);
+  m.getContainer().classList.toggle("bright-labels", !!b.labels);
+  b.layers.forEach(l => l.addTo(m));
+  return b.layers;
+}
+let tiles = [];
+function setBasemap() { tiles = applyBase(map, tiles); }
+document.getElementById("baseSel").addEventListener("change", e => { basemap = e.target.value; store.set("basemap", basemap); setBasemap(); });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { setBasemap(); buildCatChips(); renderAll(); });
 
 // Semantic heat ramp (blue → amber → red); always shown with a scale in the legend.
@@ -492,35 +654,96 @@ document.getElementById("modeSeg").addEventListener("click", e => {
 });
 map.on("moveend", () => { if (F.bbox) refresh(); });
 
-// Fire stations layer (with their station numbers), remembered between visits
+// Fire stations layer (with their station numbers), colored by department and remembered
+// between visits. Hover a station for its recent calls; click it to show only those.
 const stationLayer = L.layerGroup();
-let stationsLoaded = false;
+const RANGE_LABEL = { 1: "in the last 24 h", 7: "in the last 7 days", 30: "in the last 30 days", 90: "in the last 90 days",
+  365: "in the last year", 0: "in all data" };
+let stationsLoaded = false, stationLegendHtml = "", STATIONS = [];
+// The station(s) a call belongs to: from unit numbers where they carry the station (Hamilton:
+// Engine 383 is Station 83), otherwise the nearest station of a department on the call.
+function stationsFor(i) {
+  if (!STATIONS.length) return [];
+  const keys = new Set();
+  if (UNIT_PREFIX) for (const u of i.units) {
+    const n = (u.match(/\d+/) || [""])[0];
+    if (n.length === 3 && n.startsWith(UNIT_PREFIX) && STATIONS.some(s => s.key === n.slice(1))) keys.add(n.slice(1));
+  }
+  if (!keys.size && i.lat != null) {
+    let best = null, bd = 15000;
+    for (const s of STATIONS) if (i.agencies.includes(s.dept)) {
+      const d = map.distance([i.lat, i.lon], [s.lat, s.lon]); if (d < bd) { bd = d; best = s; }
+    }
+    if (best) keys.add(best.key);
+  }
+  return [...keys];
+}
+const shown = () => F.station ? incidents.filter(i => stationsFor(i).includes(F.station.key)) : incidents;
 async function showStations(on) {
   store.set("stations", on);
-  if (!on) { map.removeLayer(stationLayer); return; }
+  const legendEl = document.getElementById("stationLegend");
+  if (!on) { map.removeLayer(stationLayer); legendEl.innerHTML = ""; return; }
   if (!stationsLoaded) {
-    const list = await fetch("api/stations").then(r => r.json()).catch(() => []);
-    for (const s of list) {
+    STATIONS = await fetch("api/stations").then(r => r.json()).catch(() => []);
+    const order = Object.keys(DEPT_KIND);
+    const depts = [...new Set(STATIONS.map(s => s.dept || "Other"))]
+      .sort((a, b) => (order.indexOf(a) + 1 || 999) - (order.indexOf(b) + 1 || 999));
+    stationLegendHtml = depts.map(d => `<div><span class="sq" style="background:${deptColor(d)}"></span>${esc(d)}</div>`).join("");
+    for (const s of STATIONS) {
       const icon = L.divIcon({ className: "", iconSize: [22, 22], iconAnchor: [11, 11],
-        html: `<div class="station-icon ${DEPT_KIND[s.dept] === "ems" ? "ems" : ""}">${esc(s.number || "FD")}</div>` });
+        html: `<div class="station-icon" style="background:${deptColor(s.dept)}">${esc(s.number || "FD")}</div>` });
       const m = L.marker([s.lat, s.lon], { icon, keyboard: false, zIndexOffset: -1000 });
-      const tip = `<b>${esc(s.label)}</b>${s.dept ? `<div class="m">${esc(s.dept)}</div>` : ""}${s.address ? `<div class="m">${esc(s.address)}</div>` : ""}`;
-      m.on("mouseover", ev => showTip(ev.originalEvent, tip));
+      m.on("mouseover", ev => {
+        const calls = incidents.filter(i => stationsFor(i).includes(s.key));
+        showTip(ev.originalEvent, `<b>${esc(s.label)}</b>${s.dept ? `<div class="m">${esc(s.dept)}</div>` : ""}
+          ${s.address ? `<div class="m">${esc(s.address)}</div>` : ""}
+          <div style="margin-top:4px">${calls.length} call${calls.length === 1 ? "" : "s"} ${RANGE_LABEL[F.days] || ""}</div>
+          ${calls.slice(0, 3).map(i => `<div class="m">${hm(i.first_ms)} · ${esc(i.nature)}</div>`).join("")}
+          ${calls.length ? `<div class="m" style="margin-top:4px">Click to show only these</div>` : ""}`);
+      });
       m.on("mouseout", hideTip);
+      m.on("click", () => { hideTip(); F.station = F.station && F.station.key === s.key ? null : { key: s.key, label: s.label }; refresh(); });
       stationLayer.addLayer(m);
     }
     stationsLoaded = true;
   }
+  legendEl.innerHTML = stationLegendHtml;
   stationLayer.addTo(map);
 }
 document.getElementById("stationsToggle").addEventListener("change", e => showStations(e.target.checked));
 
+// Incident pins, grouped into numbered bubbles when they crowd together (zoomed out)
+const clusters = L.markerClusterGroup({
+  maxClusterRadius: 38, disableClusteringAtZoom: 16, showCoverageOnHover: false, spiderfyOnMaxZoom: true, chunkedLoading: true,
+  iconCreateFunction: cl => {
+    const kids = cl.getAllChildMarkers(), count = {};
+    let prio = false;
+    for (const k of kids) { count[k.inc.category] = (count[k.inc.category] || 0) + 1; prio = prio || isPrio(k.inc); }
+    const top = Object.entries(count).sort((a, b) => b[1] - a[1])[0][0];
+    return L.divIcon({ className: "", iconSize: [34, 34],
+      html: `<div class="cluster ${prio ? "prio" : ""}" style="--c:${catColor(top)}">${fmtN(kids.length)}</div>` });
+  },
+});
+const markers = new Map();                 // incident id -> marker, for list <-> map highlighting
+function markerEl(id) {
+  const m = markers.get(id); if (!m || !map.hasLayer(clusters)) return null;
+  const v = clusters.getVisibleParent(m);
+  return v && v.getElement() ? v.getElement().firstElementChild : null;
+}
+function pinIcon(i) {
+  const approx = i.precision === "street" || i.confidence === "approximate" || i.confidence === "doubtful";
+  const fresh = Date.now() - i.first_ms < FRESH_MS;
+  return L.divIcon({ className: "", iconSize: [18, 18],
+    html: `<div class="pin ${approx ? "approx" : ""} ${isPrio(i) ? "prio" : ""} ${fresh ? "fresh" : ""}" style="--c:${catColor(i.category)}">${glyph(i.category)}</div>` });
+}
+
 function renderMap() {
   if (heat) { map.removeLayer(heat); heat = null; }
-  dots.clearLayers();
-  const pts = incidents.filter(i => i.lat != null);
+  dots.clearLayers(); clusters.clearLayers(); markers.clear();
+  const pts = shown().filter(i => i.lat != null);
   const legend = document.getElementById("mapLegend");
   if (mode === "heat") {
+    map.removeLayer(clusters);
     heat = L.heatLayer(pts.map(i => [i.lat, i.lon, 1]), {
       radius: 22, blur: 18, maxZoom: 15, minOpacity: .35, gradient: HEAT,
     }).addTo(map);
@@ -529,25 +752,32 @@ function renderMap() {
       <div>${fmtN(pts.length)} mapped incidents</div>`;
   } else {
     // newest last so they draw on top
-    const now = Date.now();
+    const list = [];
     for (const i of [...pts].reverse()) {
-      const approx = i.precision === "street" || i.confidence === "approximate" || i.confidence === "doubtful";
-      const fresh = now - i.first_ms < FRESH_MS;
-      if (fresh) dots.addLayer(L.marker([i.lat, i.lon], { interactive: false, keyboard: false,
-        icon: L.divIcon({ className: "", html: `<div class="pulse" style="width:12px;height:12px"></div>`, iconSize: [12, 12] }) }));
-      const m = L.circleMarker([i.lat, i.lon], {
-        radius: fresh ? 8 : 6, weight: 2, color: approx ? catColor(i.category) : css("--surface"),
-        fillColor: catColor(i.category), fillOpacity: approx ? .25 : .95,
+      const m = L.marker([i.lat, i.lon], { icon: pinIcon(i), keyboard: false, riseOnHover: true });
+      m.inc = i;
+      m.on("mouseover", ev => {
+        showTip(ev.originalEvent, `<b>${esc(i.nature)}</b>${isPrio(i) ? ` <span class="prio-badge">PRIORITY</span>` : ""}<div class="m">${esc(i.matched || i.address || i.place)}</div><div class="m">${fmtTime(i.first_ms)}</div><div class="m">${esc(i.agencies.join(", "))}</div>${i.confidence ? `<div class="m">Location: ${CONF[i.confidence] || i.confidence}</div>` : ""}`);
+        const it = document.querySelector(`#feed [data-id="${i.id}"]`); if (it) it.classList.add("hl");
       });
-      m.on("mouseover", ev => showTip(ev.originalEvent, `<b>${esc(i.nature)}</b><div class="m">${esc(i.matched || i.address || i.place)}</div><div class="m">${fmtTime(i.first_ms)}</div><div class="m">${esc(i.agencies.join(", "))}</div>${i.confidence ? `<div class="m">Location: ${CONF[i.confidence] || i.confidence}</div>` : ""}`));
-      m.on("mouseout", hideTip);
-      m.on("click", () => openIncident(i.id));
-      dots.addLayer(m);
+      m.on("mouseout", () => { hideTip(); document.querySelectorAll("#feed .item.hl").forEach(x => x.classList.remove("hl")); });
+      m.on("click", () => { selectInFeed(i.id); openIncident(i.id); });
+      markers.set(i.id, m);
+      list.push(m);
     }
+    clusters.addLayers(list);
+    if (!map.hasLayer(clusters)) clusters.addTo(map);
     const present = CATS.filter(c => pts.some(i => i.category === c));
-    legend.innerHTML = present.map(c => `<div><span class="sw" style="background:${catColor(c)}"></span>${c}</div>`).join("")
-      + `<div style="margin-top:4px"><span class="sw" style="border:2px solid var(--muted)"></span>Approximate (street only)</div>`;
+    legend.innerHTML = present.map(c => `<div><span class="pin" style="--c:${catColor(c)};width:14px;height:14px;box-shadow:none">${glyph(c)}</span>${c}</div>`).join("")
+      + `<div style="margin-top:4px"><span class="sw" style="box-shadow:0 0 0 2px var(--stale)"></span>Priority call</div>`
+      + `<div><span class="sw" style="border:2px solid var(--muted)"></span>Approximate (street only)</div>`;
   }
+}
+// Scroll the list to a call picked on the map and mark it
+function selectInFeed(id) {
+  document.querySelectorAll("#feed .item.sel").forEach(x => x.classList.remove("sel"));
+  const it = document.querySelector(`#feed [data-id="${id}"]`);
+  if (it) { it.classList.add("sel"); it.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
 }
 
 // ─────────────────────────────────────────────
@@ -555,45 +785,53 @@ function renderMap() {
 // ─────────────────────────────────────────────
 function fmtTime(ms) {
   const d = new Date(ms), now = new Date();
-  const t = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  if (d.toDateString() === now.toDateString()) return `Today ${t}`;
-  return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + t;
+  if (d.toDateString() === now.toDateString()) return `Today ${hm(ms)}`;
+  return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + hm(ms);
 }
 function relTime(ms) {
   const s = (Date.now() - ms) / 1000;
   if (s < 3600) return `${Math.max(1, Math.round(s / 60))} min ago`;
   if (s < 86400) return `${Math.round(s / 3600)} h ago`;
-  return fmtTime(ms);
+  return "";
 }
 function renderFeed() {
-  document.getElementById("feedCount").textContent = fmtN(incidents.length);
+  const list = shown();
+  document.getElementById("feedCount").textContent = fmtN(list.length);
   const el = document.getElementById("feed");
-  if (!incidents.length) { el.innerHTML = `<div class="empty">No incidents match these filters yet.<br>New dispatches appear here within a minute.</div>`; return; }
+  if (!list.length) { el.innerHTML = `<div class="empty">No incidents match these filters yet.<br>New dispatches appear here within a minute.</div>`; return; }
   const now = Date.now(), today = new Date().toDateString();
   let lastDay = null;
-  el.innerHTML = incidents.slice(0, 300).map(i => {
-    const approx = i.lat == null || i.precision === "street";
-    const col = catColor(i.category);
+  el.innerHTML = list.slice(0, 300).map(i => {
+    const approx = i.lat != null && i.precision === "street";
     const fresh = now - i.first_ms < FRESH_MS;
     const day = new Date(i.first_ms).toDateString();
     const sep = F.days !== 1 && day !== lastDay
       ? `<div class="day-sep">${day === today ? "Today" : new Date(i.first_ms).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}</div>` : "";
     lastDay = day;
-    const patient = [i.patient_age ? `${i.patient_age}${i.patient_sex ? (i.patient_sex === "male" ? "M" : "F") : " y/o"}` : ""].filter(Boolean);
-    return `${sep}<div class="item ${fresh ? "fresh" : ""}" data-id="${i.id}">
-      <span class="sw ${approx ? "approx" : ""}" style="background:${col};border-color:${col}" title="${i.lat == null ? "Not mapped" : approx ? "Approximate location" : "Mapped"}"></span>
+    const patient = i.patient_age ? `${i.patient_age}${i.patient_sex ? (i.patient_sex === "male" ? "M" : "F") : " y/o"}` : "";
+    const when = [day === today ? hm(i.first_ms) : fmtTime(i.first_ms), relTime(i.first_ms)].filter(Boolean).join(" · ");
+    return `${sep}<div class="item ${fresh ? "fresh" : ""}" data-id="${i.id}" style="--c:${catColor(i.category)}">
       <div class="body">
-        <div class="t1">${esc(i.nature)}${fresh ? `<span class="new-badge">NEW</span>` : ""}</div>
-        <div class="t2">${esc(i.matched || i.address || i.place || "Unknown location")}${i.place && i.matched ? " · " + esc(i.place) : ""}</div>
+        <div class="t1">${esc(i.nature)}${isPrio(i) ? `<span class="prio-badge">PRIORITY</span>` : ""}${fresh ? `<span class="new-badge">NEW</span>` : ""}</div>
+        <div class="t2">${esc(i.matched || i.address || i.place || "Unknown location")}${i.place && i.matched ? " · " + esc(i.place) : ""}
+          ${i.lat == null ? `<span class="approx-tag">· not mapped</span>` : approx ? `<span class="approx-tag">· approx.</span>` : ""}</div>
         ${i.summary ? `<div class="t3">${esc(i.summary)}</div>` : ""}
-        <div class="t3"><span class="num">${relTime(i.first_ms)}</span>${patient.length ? " · " + patient.join(" ") : ""}${i.units.length ? " · " + esc(i.units.slice(0, 4).join(", ")) : ""}</div>
+        <div class="t3"><span class="num">${when}</span>${patient ? " · " + patient : ""}${i.units.length ? " · " + esc(i.units.slice(0, 4).join(", ")) : ""}</div>
         ${deptBadges(i.agencies)}
       </div></div>`;
   }).join("");
 }
-document.getElementById("feed").addEventListener("click", e => {
+const feedEl = document.getElementById("feed");
+feedEl.addEventListener("click", e => {
   const it = e.target.closest("[data-id]"); if (it) openIncident(+it.dataset.id, true);
 });
+// Hovering a call in the list lifts its pin (or the bubble it's grouped in) on the map
+feedEl.addEventListener("mouseover", e => {
+  const it = e.target.closest("[data-id]"); if (!it) return;
+  document.querySelectorAll(".pin.hl, .cluster.hl").forEach(x => x.classList.remove("hl"));
+  const el = markerEl(+it.dataset.id); if (el) el.classList.add("hl");
+});
+feedEl.addEventListener("mouseleave", () => document.querySelectorAll(".pin.hl, .cluster.hl").forEach(x => x.classList.remove("hl")));
 
 // ─────────────────────────────────────────────
 // Incident detail
@@ -601,15 +839,39 @@ document.getElementById("feed").addEventListener("click", e => {
 const PREC = { address: "exact address", intersection: "intersection", place: "named place", street: "street only (approximate)" };
 const CONF = { confirmed: "confirmed by cross streets", high: "matches the departments' area",
   approximate: "approximate, still checking", doubtful: "doesn't match the call, still checking" };
+// Unit timeline as one bar per unit: colored by status from each report to the next
+const USTAT_COLOR = { "dispatched": "--muted", "en route": "--c-traffic", "on scene": "--stale", "transporting": "--c-medical",
+  "at hospital": "--c-medical", "cleared": "--c-rescue", "on another call": "--c-service", "out of service": "--c-other" };
+function unitBars(i) {
+  const tl = i.timeline || []; if (!tl.length) return "";
+  const t0 = Math.min(i.first_ms, ...tl.map(e => e.time_ms));
+  const t1 = Math.max(t0 + 5 * 60000, ...tl.map(e => e.time_ms + 3 * 60000));
+  const x = t => ((t - t0) / (t1 - t0) * 100).toFixed(2);
+  const byUnit = {};
+  for (const e of tl) (byUnit[e.unit] = byUnit[e.unit] || []).push(e);
+  const rows = Object.entries(byUnit).map(([u, evs]) => `<div class="u" title="${esc(u)}">${esc(u)}</div><div class="track">${
+    evs.map((e, k) => { const end = k + 1 < evs.length ? evs[k + 1].time_ms : (e.status === "cleared" ? e.time_ms + 60000 : t1);
+      return `<span class="seg" style="left:${x(e.time_ms)}%;width:${Math.max(.8, x(end) - x(e.time_ms))}%;background:var(${USTAT_COLOR[e.status] || "--muted"})"
+        data-tip="<b>${esc(u)}</b><div class='m'>${esc(e.status)} ${hm(e.time_ms)}${k + 1 < evs.length ? `–${hm(end)}` : ""}</div>"></span>`; }).join("")
+  }</div>`).join("");
+  const used = [...new Set(tl.map(e => e.status))];
+  return `<div class="tx"><div class="h">Units</div><div class="ubars">${rows}
+    <div class="axis"><span>${hm(t0)}</span><span>${hm((t0 + t1) / 2)}</span><span>${hm(t1)}</span></div></div>
+    <div class="ukey">${used.map(s => `<span><i style="background:var(${USTAT_COLOR[s] || "--muted"})"></i>${esc(s)}</span>`).join("")}</div></div>`;
+}
+let miniMap = null;
 async function openIncident(id, fly) {
   const r = await fetch(`api/incidents/${id}`); if (!r.ok) return;
   const i = await r.json();
-  if (fly && i.lat != null) map.flyTo([i.lat, i.lon], 16, { duration: .6 });
+  if (fly && i.lat != null && view === "mapView" && !(mq.matches && document.body.dataset.mtab !== "map")) map.flyTo([i.lat, i.lon], 16, { duration: .6 });
   const patient = [i.patient_age ? `${i.patient_age} y/o` : "", i.patient_sex || ""].filter(Boolean).join(" ");
+  const txs = i.transmissions || [];
+  const total = txs.reduce((a, t) => a + (t.len_s || 0), 0);
   document.getElementById("modalBody").innerHTML = `
     <button class="x" aria-label="Close">×</button>
-    <h3><span class="sw" style="background:${catColor(i.category)}"></span>${esc(i.nature)}${i.corrected ? `<span class="prec conf-confirmed" title="Fixed by hand: ${esc(i.corrected)}">corrected</span>` : ""}</h3>
-    <div class="meta">${esc(i.category)} · ${new Date(i.first_ms).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div>
+    <h3><span class="sw" style="background:${catColor(i.category)}"></span>${esc(i.nature)}${isPrio(i) ? `<span class="prio-badge">PRIORITY</span>` : ""}${i.corrected ? `<span class="prec conf-confirmed" title="Fixed by hand: ${esc(i.corrected)}">corrected</span>` : ""}</h3>
+    <div class="meta">${esc(i.category)} · ${new Date(i.first_ms).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })} ${hm(i.first_ms)}</div>
+    ${i.lat != null ? `<div id="miniMap"></div>` : ""}
     <dl class="kv">
       <dt>Location</dt><dd>${esc(i.matched || i.address || i.place || "Unknown")}${i.precision ? `<span class="prec">${PREC[i.precision] || i.precision}</span>` : `<span class="prec">not mapped, still checking</span>`}${i.confidence ? `<span class="prec conf-${i.confidence}">${CONF[i.confidence] || i.confidence}</span>` : ""}</dd>
       ${i.place ? `<dt>Place</dt><dd>${esc(i.place)}</dd>` : ""}
@@ -624,23 +886,46 @@ async function openIncident(id, fly) {
     ${!(i.transmissions || []).length ? `<div class="tx"><p style="color:var(--muted)">Transcripts, audio and call
       details for this incident have expired. Only the call type, location and departments are kept
       (Settings → Data retention).</p></div>` : ""}
-    ${(i.transmissions || []).map(t => `<div class="tx">
-      <div class="h">${esc(t.agency)} · ${new Date(t.time_ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} · ${t.len_s}s</div>
+    ${unitBars(i)}
+    ${txs.length > 1 ? `<div class="tx"><div class="h">Radio</div><div class="playall">
+      <button class="btn" id="playAll">▶ Play all ${txs.length} clips</button><span style="color:var(--muted);font-size:12px">${Math.round(total)}s in order</span></div></div>` : ""}
+    ${txs.map(t => `<div class="tx">
+      <div class="h">${esc(t.agency)} · ${hms(t.time_ms)} · ${t.len_s}s</div>
       <p>${esc(t.transcript || "")}</p>
       ${t.transcript_raw && t.transcript_raw !== t.transcript ? `<details class="raw"><summary>As first heard (before name fixes)</summary>${esc(t.transcript_raw)}</details>` : ""}
       <audio controls preload="none" src="api/audio/${encodeURIComponent(t.id)}"></audio></div>`).join("")}
-    ${(i.timeline || []).length ? `<div class="tx"><div class="h">Units</div><div class="tl">${i.timeline.map(ev =>
-      `<span class="when">${new Date(ev.time_ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
-       <span>${esc(ev.unit)} · ${esc(ev.status)}</span>`).join("")}</div></div>` : ""}
     ${i.history && i.history.length ? `<div class="tx"><div class="h">Previous incidents at this address</div>
       ${i.history.map(h => `<div style="font-size:13px;display:flex;gap:8px;align-items:center;padding:2px 0;cursor:pointer" data-hist="${h.id}">
         <span class="sw" style="width:8px;height:8px;border-radius:50%;background:${catColor(h.category)}"></span>${esc(h.nature)}
         <span style="color:var(--muted)">${fmtTime(h.first_ms)}</span></div>`).join("")}</div>` : ""}`;
   document.getElementById("modal").classList.add("open");
   CURRENT = i;
+  if (miniMap) { miniMap.remove(); miniMap = null; }
+  if (i.lat != null) {
+    miniMap = L.map("miniMap", { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false,
+      doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false }).setView([i.lat, i.lon], 15);
+    applyBase(miniMap);
+    L.marker([i.lat, i.lon], { icon: pinIcon(i), interactive: false }).addTo(miniMap);
+  }
+}
+// Play every clip of a call back to back, marking the one playing
+function playAll() {
+  const auds = [...document.querySelectorAll("#modalBody .tx audio")];
+  const play = k => {
+    document.querySelectorAll("#modalBody .tx.playing").forEach(x => x.classList.remove("playing"));
+    if (k >= auds.length) return;
+    const a = auds[k];
+    a.closest(".tx").classList.add("playing");
+    a.closest(".tx").scrollIntoView({ block: "nearest", behavior: "smooth" });
+    a.onended = () => { a.onended = null; play(k + 1); };
+    a.play().catch(() => play(k + 1));
+  };
+  auds.forEach(a => { a.pause(); a.currentTime = 0; a.onended = null; });
+  play(0);
 }
 document.getElementById("modal").addEventListener("click", e => {
   if (e.target.id === "modal" || e.target.closest(".x")) closeModal();
+  if (e.target.id === "playAll") playAll();
   const h = e.target.closest("[data-hist]"); if (h) openIncident(+h.dataset.hist);
   if (e.target.closest("[data-correct]")) openCorrection(CURRENT);
   if (e.target.id === "pickOnMap") startPick();
@@ -700,7 +985,7 @@ function addWordFixRow() {
 function startPick() {
   const keepAddr = document.getElementById("cAddress").value;
   closeModal();
-  document.querySelector('[data-view="mapView"]').click();
+  showMap();
   const banner = document.createElement("div");
   banner.id = "pickBanner";
   banner.style.cssText = "position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2500;background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--ring),0 4px 16px rgba(0,0,0,.2);border-radius:8px;padding:8px 12px;font-size:13px";
@@ -741,7 +1026,8 @@ async function saveCorrection() {
 }
 function closeModal() {
   document.getElementById("modal").classList.remove("open");
-  document.querySelectorAll("#modalBody audio").forEach(a => a.pause());
+  document.querySelectorAll("#modalBody audio").forEach(a => { a.onended = null; a.pause(); });
+  if (miniMap) { miniMap.remove(); miniMap = null; }
 }
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
 
@@ -783,7 +1069,17 @@ async function openSettings(msg = "", err = false) {
     </div>`;
   }
   const st = await fetch("api/status").then(r => r.json()).catch(() => ({}));
-  const rt = st.retranscribe || {};
+  const rt = st.retranscribe || {}, bf = st.backfill || {};
+  html += `<div class="set-group">Past calls and export</div>
+    <div class="set-row"><label class="name">Load past calls</label>
+      <div><select id="bfHours" aria-label="How far back"><option value="24">Last 24 h</option><option value="72">Last 3 days</option>
+        <option value="168">Last 7 days</option></select>
+        <button class="btn" id="bfBtn" ${bf.running ? "disabled" : ""}>${bf.running ? "Fetching…" : "Load"}</button></div>
+      <div class="help">Fetch and transcribe calls from before the monitor was running. Live calls are always handled first.
+        ${bf.error ? `Last run failed: ${esc(bf.error)}` : ""}</div></div>
+    <div class="set-row"><label class="name">Export to CSV</label>
+      <div><a class="btn" href="api/export.csv?${qs()}" download>Download CSV</a></div>
+      <div class="help">The incidents matching the current filters (range, category, department, search).</div></div>`;
   html += `<div class="set-group">Re-transcribe</div>
     <div class="set-row"><label class="name">Run recent calls through speech-to-text again</label>
       <div><select id="rtHours"><option value="24">Last 24 h</option><option value="72">Last 3 days</option>
@@ -850,6 +1146,12 @@ document.getElementById("modalBody").addEventListener("click", e => {
   }
   const rs = e.target.closest("[data-reset]");
   if (rs) saveSettings({ [rs.dataset.reset]: null });
+  if (e.target.id === "bfBtn") {
+    e.target.disabled = true;
+    fetch(`api/backfill?hours=${document.getElementById("bfHours").value}`, { method: "POST" })
+      .then(r => openSettings(r.ok ? "Loading past calls in the background." : `Error ${r.status}`, !r.ok))
+      .catch(() => openSettings("Server unreachable", true));
+  }
   if (e.target.id === "rtStart") {
     const pwEl = document.getElementById("adminPw");
     if (pwEl) adminPw.set(pwEl.value);
@@ -938,9 +1240,9 @@ function renderHourDow(el, cells) {
   const max = Math.max(1, ...m.flat());
   const ramp = [1, 2, 3, 4, 5, 6, 7].map(k => css(`--seq-${k}`));
   const color = v => v === 0 ? css("--seq-0") : ramp[Math.min(6, Math.floor(v / max * 6.999))];
-  const hl = h => h === 0 ? "12a" : h < 12 ? `${h}a` : h === 12 ? "12p" : `${h - 12}p`;
+  const hl = h => `${hh(h)}:00`;
   let s = `<div class="hm"><div></div>` + Array.from({ length: 24 }, (_, h) =>
-    `<div class="cl" data-hour="${h}" style="${F.hours.has(h) ? "color:var(--ink);font-weight:600" : ""}">${h % 3 === 0 ? hl(h) : ""}</div>`).join("");
+    `<div class="cl" data-hour="${h}" style="${F.hours.has(h) ? "color:var(--ink);font-weight:600" : ""}">${h % 3 === 0 ? hh(h) : ""}</div>`).join("");
   for (let d = 0; d < 7; d++) {
     s += `<div class="rl" data-dow="${d}" style="${F.dows.has(d) ? "color:var(--ink);font-weight:600" : ""}">${DOW[d]}</div>`;
     for (let h = 0; h < 24; h++) {
@@ -978,7 +1280,7 @@ function renderStats(st) {
   const topNature = st.by_nature[0];
   const hourTotals = Array(24).fill(0); st.by_hour_dow.forEach(c => hourTotals[c.hour] += c.n);
   const pk = hourTotals.indexOf(Math.max(...hourTotals));
-  const hl = h => new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: "numeric" });
+  const hl = h => `${hh(h)}:00`;
   document.getElementById("tiles").innerHTML = `
     <div class="tile hero"><div class="label">Incidents</div><div class="value">${fmtN(st.total)}</div>
       <div class="note">${st.first_date ? `${st.first_date} to ${st.last_date}` : "No data yet"}</div></div>
@@ -1007,7 +1309,7 @@ function renderStats(st) {
     { color: r => catColor(r.category), swatch: true, selected: r => F.natures.has(r.key) });
   hBars(document.getElementById("byZip"), st.by_zip, {});
   hBars(document.getElementById("byAgency"), st.by_agency, { selected: r => F.agency === r.key, swatch: true,
-    color: r => DEPT_KIND[r.key] === "ems" ? catColor("Medical") : DEPT_KIND[r.key] === "fire" ? catColor("Fire") : css("--c-other") });
+    color: r => deptColor(r.key) });
   renderHourDow(document.getElementById("hourDow"), st.by_hour_dow);
 
   // hour x category stacked
@@ -1038,7 +1340,7 @@ document.getElementById("byAgency").addEventListener("click", e => {
 });
 document.getElementById("topLoc").addEventListener("click", e => {
   const r = e.target.closest("[data-lat]"); if (!r) return;
-  document.querySelector('[data-view="mapView"]').click();
+  showMap();
   setTimeout(() => map.flyTo([+r.dataset.lat, +r.dataset.lon], 17), 50);
 });
 addEventListener("resize", () => { if (lastStats && view === "statsView") renderStats(lastStats); });
@@ -1053,40 +1355,51 @@ async function loadStatus() {
     // The feed heals itself (new session / browser identity, backoff); say so instead of a dead-end error.
     const retryIn = s.next_poll ? Math.max(0, Math.round(s.next_poll - s.now)) : null;
     const healing = !fresh && s.last_poll_error;
+    const heard = s.last_tx_ms ? `<span class="heard"> · last call ${ago(s.last_tx_ms)} ago</span>` : "";
     document.getElementById("statusPill").className = "pill " + (fresh ? "live" : healing && s.poll_failures < 20 ? "healing" : "stale");
-    document.getElementById("statusText").textContent = fresh ? "Live"
+    document.getElementById("statusText").innerHTML = fresh ? `Live${heard}`
       : healing ? (s.poll_failures < 20 ? "Reconnecting…" : "Feed error, retrying") : "Waiting for feed";
     document.getElementById("statusPill").title = healing
       ? `${s.last_poll_error}\n${s.poll_failures} failed attempt(s); trying again${retryIn != null ? ` in ${retryIn}s` : ""} with a fresh connection.`
-      : "";
+      : s.last_tx_ms ? `Last radio call ${fmtTime(s.last_tx_ms)}` : "";
+    // A banner under the header whenever new calls may be delayed
+    const banner = document.getElementById("feedBanner");
+    const since = s.last_poll ? ` (last good check ${hm(s.last_poll * 1000)})` : "";
+    const soft = !s.last_poll || (healing && s.poll_failures < 20);
+    banner.className = fresh ? "" : soft ? "on" : "on down";
+    banner.textContent = fresh ? "" : !s.last_poll ? "Connecting to the radio feed…"
+      : soft ? `Reconnecting to the radio feed${retryIn != null ? ` (retry in ${retryIn}s)` : ""}. New calls may be delayed.`
+      : `The radio feed is down${since}. The monitor keeps retrying; calls shown may be out of date.`;
     const llm = !s.llm.enabled ? "rules only"
       : (s.llm.error || "").startsWith("Downloading") ? `${s.llm.error}…`
       : s.llm.ok === false ? `AI model offline (keyword rules)` : s.llm.model;
     document.getElementById("pipelineText").textContent =
       `${s.queue ? `${fmtN(s.queue)} clips queued · ` : ""}${fmtN(s.incidents)} incidents · ${llm}`;
     document.getElementById("pipelineText").title = s.llm.error || "";
-    const bf = s.backfill || {}, btn = document.getElementById("bfBtn");
-    btn.disabled = !!bf.running;
-    btn.textContent = bf.running ? "Fetching past calls…" : "Load past calls";
-    btn.title = bf.error ? `Last backfill failed: ${bf.error}` : "Fetch and transcribe past calls. Live calls are always handled first.";
-  } catch { document.getElementById("statusPill").className = "pill stale"; document.getElementById("statusText").textContent = "Server unreachable"; }
+  } catch {
+    document.getElementById("statusPill").className = "pill stale"; document.getElementById("statusText").textContent = "Server unreachable";
+    const banner = document.getElementById("feedBanner");
+    banner.className = "on down"; banner.textContent = "Can't reach the monitor's server. Retrying…";
+  }
 }
 
 // "Active now": open calls and where every unit is (from radio status reports)
-const STATUS_ORDER = ["on scene", "transporting", "at hospital", "en route", "dispatched", "cleared", "out of service"];
+// Units in the order a call progresses; finished ones last
+const STATUS_ORDER = ["dispatched", "en route", "on scene", "transporting", "at hospital", "cleared", "on another call", "out of service"];
 async function loadActive() {
   const el = document.getElementById("active");
   let list = [];
   try { list = await fetch("api/active").then(r => r.json()); } catch { return; }
-  if (!list.length) { el.innerHTML = ""; return; }
-  const ago = ms => { const m = Math.max(0, Math.round((Date.now() - ms) / 60000)); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}`; };
+  document.getElementById("activeBadge").textContent = list.filter(i => !i.quiet).length || "";
+  if (!list.length) { el.innerHTML = `<div class="act-empty">No active calls right now.</div>`; return; }
   el.innerHTML = `<div class="act-head"><span class="dot"></span>Active now · ${list.length}</div>` + list.map(i => {
     const units = [...i.units].sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status));
-    return `<div class="act" data-id="${i.id}">
-      <div class="t1"><span class="sw" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${catColor(i.category)};margin-right:6px"></span>${esc(i.nature)}
-        <span style="color:var(--muted);font-weight:400"> · ${ago(i.first_ms)}</span></div>
+    return `<div class="act ${i.quiet ? "quiet" : ""}" data-id="${i.id}" style="--c:${catColor(i.category)}">
+      <div class="t1">${esc(i.nature)}${isPrio(i) ? `<span class="prio-badge">PRIORITY</span>` : ""}
+        <span style="color:var(--muted);font-weight:400"> · ${hm(i.first_ms)} · ${ago(i.first_ms)}</span>
+        ${i.quiet ? `<span class="quiet-note"> · quiet ${ago(i.last_activity_ms)}, likely wrapping up</span>` : ""}</div>
       <div class="t2">${esc(i.matched || i.address || i.place || "Location unknown")}</div>
-      <div>${units.map(u => `<span class="ustat s-${u.status.replace(/ /g, "-")}" title="${esc(u.status)} ${ago(u.since_ms)} ago"><i></i>${esc(u.unit)} · ${esc(u.status)}</span>`).join("")}</div>
+      <div>${units.map(u => `<span class="ustat s-${u.status.replace(/ /g, "-")}" title="${esc(u.status)} since ${hm(u.since_ms)}"><i></i>${esc(u.unit)} · ${esc(u.status)}</span>`).join("")}</div>
     </div>`;
   }).join("");
 }
@@ -1097,7 +1410,6 @@ document.getElementById("active").addEventListener("click", e => {
 async function refresh() {
   renderActiveFilters();
   loadActive();
-  document.getElementById("csvBtn").href = `api/export.csv?${qs()}`;
   try {
     if (view === "mapView") {
       incidents = await api("incidents", { limit: 20000 });
@@ -1109,12 +1421,6 @@ async function refresh() {
 }
 function renderAll() { if (view === "mapView") { renderFeed(); renderMap(); } else if (lastStats) renderStats(lastStats); }
 
-document.getElementById("bfBtn").addEventListener("click", async () => {
-  const h = document.getElementById("bfHours").value;
-  document.getElementById("bfBtn").disabled = true;
-  try { await fetch(`api/backfill?hours=${h}`, { method: "POST" }); } catch {}
-  loadStatus();
-});
 
 (async function init() {
   try {
@@ -1122,6 +1428,7 @@ document.getElementById("bfBtn").addEventListener("click", async () => {
     META = m;
     fetch("api/settings").then(r => r.json()).then(s => { META.locked = s.locked; }).catch(() => {});
     cartoKey = m.carto_key;
+    PRIORITY = new Set(m.priority || []); UNIT_PREFIX = m.unit_prefix || "";
     const c = m.county || {};
     if (c.title) { document.getElementById("title").textContent = c.title; document.title = c.title; }
     if (c.subtitle) document.getElementById("channelsLine").textContent = c.subtitle;
@@ -1140,9 +1447,14 @@ document.getElementById("bfBtn").addEventListener("click", async () => {
   document.querySelectorAll("#rangeSeg button").forEach(x => x.classList.toggle("on", +x.dataset.days === F.days));
   document.querySelectorAll("#modeSeg button").forEach(x => x.classList.toggle("on", x.dataset.mode === mode));
   if (store.get("stations", false)) { document.getElementById("stationsToggle").checked = true; showStations(true); }
+  document.getElementById("baseSel").value = basemap;
   setBasemap();
   buildCatChips();
-  if (location.hash === "#stats") { document.querySelector('[data-view="statsView"]').click(); }
+  if (location.hash === "#stats") switchView("statsView");
+  // Phones open on Active (or the screen used last); wider screens show everything at once
+  const syncLayout = () => { if (mq.matches) setMTab(location.hash === "#stats" ? "stats" : store.get("mtab", "active")); else delete document.body.dataset.mtab; };
+  mq.addEventListener("change", () => { syncLayout(); setTimeout(() => map.invalidateSize(), 0); });
+  syncLayout();
   await Promise.all([loadStatus(), refresh()]);
   setInterval(loadStatus, 15000);
   setInterval(() => { if (!document.hidden && !document.getElementById("modal").classList.contains("open")) refresh(); }, 30000);

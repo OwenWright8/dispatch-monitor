@@ -6,7 +6,7 @@ channel tones out township departments by name ("TEAS, Wea Fire, ...") and
 units answer by number, where the leading digits identify the department.
 """
 
-from . import ChannelSpec, Department, Profile
+from . import ChannelSpec, Department, Profile, Station
 
 # A department name followed by "Fire" (optionally "Township" / "Department").
 FIRE = r"(?:\s+township)?\s+fire\b"
@@ -175,5 +175,36 @@ PROFILE = Profile(
         "ivh": "Indiana Veterans' Home",
         "sycamore springs": "Sycamore Springs Hospital",
         "sycamore": "Sycamore Springs Hospital",
+    },
+    # Station numbers repeat between departments, so keys are unique and `number` is what the map shows.
+    # Locations from NERIS (neris.fsri.org), Oct 2026.
+    stations={
+        "LFD HQ": Station(40.41787, -86.89069, "Lafayette Fire", "Lafayette Fire Headquarters", "20 N 6th St", "HQ"),
+        "LFD 2": Station(40.42518, -86.87958, "Lafayette Fire", "Lafayette Station 2", "800 Erie St", "2"),
+        "LFD 3": Station(40.41737, -86.87772, "Lafayette Fire", "Lafayette Station 3", "1710 South St", "3"),
+        "LFD 5": Station(40.42461, -86.83914, "Lafayette Fire", "Lafayette Station 5", "750 N Creasy Ln", "5"),
+        "LFD 6": Station(40.44457, -86.86574, "Lafayette Fire", "Lafayette Station 6", "2561 Schuyler Ave", "6"),
+        "LFD 7": Station(40.39592, -86.87651, "Lafayette Fire", "Lafayette Station 7", "2150 S 18th St", "7"),
+        "LFD 8": Station(40.36704, -86.88476, "Lafayette Fire", "Lafayette Station 8", "911 Veterans Memorial Pkwy S", "8"),
+        "LFD 9": Station(40.39216, -86.81115, "Lafayette Fire", "Lafayette Station 9", "1757 Veterans Memorial Pkwy E", "9"),
+        "WLFD 1": Station(40.42581, -86.90858, "West Lafayette Fire", "West Lafayette Station 1", "300 North St", "1"),
+        "WLFD 2": Station(40.45176, -86.91528, "West Lafayette Fire", "West Lafayette Station 2", "531 W Navajo St", "2"),
+        "WLFD 3": Station(40.46840, -86.91999, "West Lafayette Fire", "West Lafayette Station 3", "1100 Kalberer Rd", "3"),
+        "PU": Station(40.42772, -86.92386, "Purdue Fire", "Purdue Fire Station", "1250 3rd St", "PU"),
+        "Wea": Station(40.34486, -86.86852, "Wea Township Fire", "Wea Township Fire", "1700 Wea School Rd", "W"),
+        "Wabash 1": Station(40.45947, -86.96125, "Wabash Township Fire", "Wabash Township Station 1", "2899 Klondike Rd", "1"),
+        "Wabash 2": Station(40.41595, -86.96115, "Wabash Township Fire", "Wabash Township Station 2", "51 S Newman Rd", "2"),
+        "Shadeland": Station(40.37105, -86.95187, "Shadeland Fire", "Shadeland Fire", "3209 S 250 W", "S"),
+        "Sheffield": Station(40.37597, -86.76727, "Sheffield Fire", "Sheffield Township Fire", "285 Market St, Dayton", "S"),
+        "West Point": Station(40.34524, -87.04469, "West Point Fire", "West Point Fire", "4949 State Road 25 S", "WP"),
+        "Battle Ground 1": Station(40.51048, -86.83870, "Battle Ground Fire", "Tippecanoe Township Station 1",
+                                   "112 North St, Battle Ground", "1"),
+        "Battle Ground 2": Station(40.51139, -86.91570, "Battle Ground Fire", "Tippecanoe Township Station 2", "448 W 650 N", "2"),
+        "Buck Creek": Station(40.48756, -86.76277, "Buck Creek Fire", "Buck Creek Fire", "7400 Railroad St, Buck Creek", "BC"),
+        "Randolph": Station(40.25105, -86.90404, "Randolph Township Fire", "Randolph Township Fire",
+                            "11508 US Highway 231 S, Romney", "R"),
+        "Clarks Hill 1": Station(40.24707, -86.72565, "Clarks Hill Fire", "Clarks Hill-Lauramie Station 1",
+                                 "9401 White St, Clarks Hill", "1"),
+        "Clarks Hill 2": Station(40.28357, -86.77107, "Clarks Hill Fire", "Stockwell Station 2", "9220 Yorktown St, Stockwell", "2"),
     },
 )

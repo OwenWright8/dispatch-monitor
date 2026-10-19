@@ -48,6 +48,7 @@ class Station:
     dept: str                       # department name (as in Profile.departments)
     label: str                      # "Station 41"
     address: str = ""
+    number: str = ""                # shown on the map icon; defaults to the profile key ("41")
 
 
 @dataclass(frozen=True)

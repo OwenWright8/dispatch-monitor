@@ -30,7 +30,12 @@ STATUSES: list[tuple[str, re.Pattern]] = [
 ]
 # When was a unit last seen, and is a call still open
 ACTIVE_HOURS = 3
-STALE_MIN = 90          # a call with no unit traffic for this long is treated as done
+# Units often go available with a button on the CAD terminal instead of saying so on
+# the radio, so a call also ends after this long with no radio traffic (by category).
+# Half way there it shows as "quiet".
+QUIET_MIN = {"Medical": 45, "Fire": 90, "Hazmat": 90, "Rescue": 75, "Traffic": 45,
+             "Alarm": 25, "Service": 30, "Other": 30}
+DONE = ("cleared", "out of service", "on another call")
 
 _UNIT = re.compile(r"\b(engine|ladder|truck|tower|medic|squad|rescue|tanker|brush|grass|battalion|chief|utility|"
                    r"ambulance|safety|edo|car|boat)[\s,]*(\d{2,4}[a-z]?)\b", re.I)
@@ -106,31 +111,57 @@ def timeline(incident_id: int) -> list[dict]:
         "SELECT time_ms, unit, status FROM unit_events WHERE incident_id=? ORDER BY time_ms", (incident_id,))]
 
 
+def is_unit(name: str) -> bool:
+    """A real unit ("Engine 383", "Station 2", "Westside Medic"), not a department name
+    the extractor put in the unit list ("Station Purdue Fire")."""
+    return bool(re.search(r"\d", name) or re.search(r"\bmedic\b", name, re.I))
+
+
 def active(now_ms: int | None = None) -> list[dict]:
-    """Open incidents: dispatched in the last few hours, not every unit cleared, and
-    some unit traffic recently. Each comes with every unit's latest status."""
+    """Open incidents with every unit's latest status. A call is over when every unit
+    has cleared, when its units have all been sent to newer calls (they went available
+    on the CAD without saying so), or after a quiet spell with no radio traffic."""
     now_ms = now_ms or int(time.time() * 1000)
     c = db.conn()
+    rows = c.execute("SELECT id, first_ms, last_ms, nature, category, matched, address, place, agencies, units, "
+                     "lat, lon FROM incidents WHERE first_ms >= ? ORDER BY first_ms DESC",
+                     (now_ms - ACTIVE_HOURS * 3_600_000,)).fetchall()
+    # Each unit's dispatches, newest first: a unit on a newer call has left the older one
+    dispatches = [(r["first_ms"], [_number(u) for u in json.loads(r["units"] or "[]") if is_unit(u)]) for r in rows]
     out = []
-    for inc in c.execute("SELECT id, first_ms, last_ms, nature, category, matched, address, place, agencies, units, "
-                         "lat, lon FROM incidents WHERE first_ms >= ? ORDER BY first_ms DESC",
-                         (now_ms - ACTIVE_HOURS * 3_600_000,)):
+    for inc in rows:
         latest: dict[str, dict] = {}
         for u in json.loads(inc["units"] or "[]"):
-            latest[u] = {"unit": u, "status": "dispatched", "since_ms": inc["first_ms"]}
+            if is_unit(u):
+                latest[u] = {"unit": u, "status": "dispatched", "since_ms": inc["first_ms"]}
         last_activity = inc["last_ms"]
         for ev in c.execute("SELECT time_ms, unit, number, status FROM unit_events WHERE incident_id=? "
                             "ORDER BY time_ms", (inc["id"],)):
+            if not is_unit(ev["unit"] or ""):
+                continue
             key = next((u for u in latest if same_unit(ev["number"], _number(u))), ev["unit"])
             latest[key] = {"unit": key, "status": ev["status"], "since_ms": ev["time_ms"]}
             last_activity = max(last_activity, ev["time_ms"])
+        for u in latest.values():
+            if u["status"] in DONE:
+                continue
+            num = _number(u["unit"])
+            later = [t for t, nums in dispatches if t > max(inc["first_ms"], u["since_ms"])
+                     and any(same_unit(num, n) or same_unit(n, num) for n in nums)]
+            if later:
+                u.update(status="on another call", since_ms=min(later))
         units = list(latest.values())
-        done = units and all(u["status"] in ("cleared", "out of service") for u in units)
-        if done or now_ms - last_activity > STALE_MIN * 60_000:
+        if units and all(u["status"] in DONE for u in units):
+            continue
+        quiet_min = QUIET_MIN.get(inc["category"], 45)
+        idle_min = (now_ms - last_activity) / 60_000
+        if idle_min > quiet_min:
             continue
         d = dict(inc)
         d["agencies"] = json.loads(d["agencies"])
         d["units"] = units
         d["last_activity_ms"] = last_activity
+        d["quiet"] = idle_min > quiet_min / 2           # nothing heard for a while: probably wrapping up
+        d["ends_ms"] = int(last_activity + quiet_min * 60_000)
         out.append(d)
     return out
