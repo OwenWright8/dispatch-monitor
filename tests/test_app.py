@@ -6,7 +6,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from dispatch import api, config, corrections, db, departments, settings
+from dispatch import api, config, corrections, db, departments, settings, units
 from dispatch.taxonomy import category_for
 
 client = TestClient(api.app)
@@ -95,3 +95,23 @@ def test_stations_endpoint_lists_profile_stations():
     assert {(s.lat, s.lon) for s in config.PROFILE.stations.values()} <= listed
     for s in got:
         assert config.COUNTY_BBOX[0] <= s["lat"] <= config.COUNTY_BBOX[2]
+
+
+def test_active_calls_end_without_a_radio_clear():
+    now, m = int(time.time() * 1000), 60_000
+    # Units sent to a newer call have left the older one (they cleared on the CAD, not the radio)
+    old = _incident(first_ms=now - 20 * m, last_ms=now - 20 * m, units=json.dumps(["Engine 901"]))
+    new = _incident(first_ms=now - 5 * m, last_ms=now - 5 * m, units=json.dumps(["Engine 901", "Station Junk Fire"]))
+    # A medical call nobody has mentioned for an hour is over; after half an hour it's "quiet"
+    stale = _incident(first_ms=now - 60 * m, last_ms=now - 60 * m, units=json.dumps(["Medic 902"]))
+    quiet = _incident(first_ms=now - 30 * m, last_ms=now - 30 * m, units=json.dumps(["Medic 903"]))
+    got = {a["id"]: a for a in units.active(now)}
+    assert old not in got and stale not in got
+    assert [u["unit"] for u in got[new]["units"]] == ["Engine 901"]        # department names aren't units
+    assert got[quiet]["quiet"] and not got[new]["quiet"]
+
+
+def test_meta_lists_priority_types():
+    m = client.get("/api/meta").json()
+    assert "Cardiac Arrest" in m["priority"] and "unit_prefix" in m
+    assert all("key" in s for s in client.get("/api/stations").json())

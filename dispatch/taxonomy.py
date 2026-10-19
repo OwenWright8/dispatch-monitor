@@ -32,6 +32,13 @@ TAXONOMY: dict[str, list[str]] = {
     "Other": ["Other"],
 }
 
+# Life-threatening / high-priority call types, marked with a ring on the map.
+PRIORITY = [
+    "Cardiac Arrest", "Breathing Problem", "Chest Pain", "Unconscious / Fainting", "Stroke",
+    "Overdose / Poisoning", "Choking", "Unknown Problem / Person Down",
+    "Structure Fire", "Crash with Entrapment", "Pedestrian / Cyclist Struck", "Water Rescue",
+]
+
 # What each easily-confused nature means, given to the LLM so it stops
 # defaulting to "Other Medical" and stops calling every alarm a fire.
 NATURE_GUIDE: dict[str, str] = {

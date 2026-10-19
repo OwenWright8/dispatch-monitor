@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, corrections, db, openmhz, pipeline, settings, transcribe, units
-from .taxonomy import CATEGORIES, TAXONOMY
+from .taxonomy import CATEGORIES, PRIORITY, TAXONOMY
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -104,7 +104,8 @@ def meta():
     depts = [{"name": d.name, "kind": d.kind, "area": d.area} for d in p.departments]
     known = {d["name"] for d in depts}
     depts += [{"name": a, "kind": "other", "area": ""} for a in sorted(seen - known)]
-    return {"categories": CATEGORIES, "taxonomy": TAXONOMY,
+    return {"categories": CATEGORIES, "taxonomy": TAXONOMY, "priority": PRIORITY,
+            "unit_prefix": p.unit_shorthand_prefix,
             "county": {"key": p.key, "name": p.name, "state": p.state, "title": p.title, "subtitle": p.subtitle,
                        "center": p.center, "zoom": p.zoom, "bbox": p.bbox},
             "departments": depts,
@@ -126,6 +127,7 @@ def status():
         "errors": q("SELECT COUNT(*) FROM transmissions WHERE status='error'"),
         "oldest_ms": q("SELECT MIN(first_ms) FROM incidents"),
         "newest_ms": q("SELECT MAX(first_ms) FROM incidents"),
+        "last_tx_ms": q("SELECT MAX(time_ms) FROM transmissions"),
         "last_poll": s["last_poll"], "last_poll_error": s["last_poll_error"],
         "poll_failures": s["poll_failures"], "next_poll": s["next_poll"], "feed_identity": openmhz.identity(),
         "last_processed": s["last_processed"],
