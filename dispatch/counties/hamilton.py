@@ -118,6 +118,7 @@ PROFILE = Profile(
     # geocoder (2026-10). The map data labels Carmel 46 as "Fire Station 48", so the
     # official list wins.
     grid_codes=True,
+    unit_shorthand_prefix="3",
     stations={
         "15": Station(40.0568, -85.9105, "Wayne Township Fire", "Station 15", "18441 Durbin Rd"),
         "21": Station(40.1203, -86.0217, "Cicero Fire", "Station 21", "Cicero"),

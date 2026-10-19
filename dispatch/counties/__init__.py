@@ -85,6 +85,8 @@ class Profile:
     # Extra (regex, replacement) transcript fixes beyond department names.
     transcript_fixes: tuple[tuple[str, str], ...] = ()
     unit_examples: str = '"Station 3", "Engine 1502", "Medic 5"'
+    # Units shortened on the air: with "3", "Ladder 72" is Ladder 372 (Hamilton).
+    unit_shorthand_prefix: str = ""
     # Worked examples of this county's dispatch style for the LLM:
     # ((transcript, expected JSON fields), ...)
     examples: tuple = ()

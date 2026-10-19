@@ -137,3 +137,24 @@ def test_grid_far_from_pin_is_doubtful():
     assert g._confidence(near, h) == "high"
     assert g._confidence(far, h) == "doubtful"
     assert h.rank((near.lat, near.lon)) < h.rank((far.lat, far.lon))
+
+
+def test_unit_status_reports():
+    from dispatch import units
+    assert units.parse("Dispatch, Engine 41 is on scene. Engine 41.") == [("Engine 41", "41", "on scene")]
+    assert units.parse("Medic 605 is en route to IU with one single pin. Clear.")[0][2] == "transporting"
+    assert ("Ladder 72", "72", "cleared") in units.parse(
+        "Control, Ladder 72. Fire's out, no other hazards here on scene, we're back at service.")
+    assert units.parse("Control, Medic 381. We're going to be out of service for training.")[0][2] == "out of service"
+    assert ("924", "924", "on scene") in units.parse("Dispatch 924. 924 is arriving. Nothing visible.")
+    assert units.parse("Engine 343, Medic 345, 9979 Gwyn Drive, for a sick person, 1414.") == []
+
+
+def test_unit_shorthand(monkeypatch):
+    import dataclasses
+    from dispatch import config, units
+    monkeypatch.setattr(config, "PROFILE", dataclasses.replace(config.PROFILE, unit_shorthand_prefix="3"))
+    assert units.same_unit("72", "372")           # "Ladder 72" on the air is Ladder 372
+    assert units.same_unit("381", "381")
+    assert not units.same_unit("381", "382")
+    assert not units.same_unit("72", "472")

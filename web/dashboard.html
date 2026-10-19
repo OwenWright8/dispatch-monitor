@@ -214,6 +214,25 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .item .body .depts { white-space: normal; }
 .new-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; color: var(--surface); background: var(--stale); border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: 1px; }
 .item.fresh { background: color-mix(in srgb, var(--stale) 6%, transparent); }
+/* active incidents */
+#active { border-bottom: 1px solid var(--grid); max-height: 45vh; overflow-y: auto; }
+#active:empty { display: none; }
+.act-head { padding: 8px 14px; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--stale); display: flex; gap: 6px; align-items: center; }
+.act-head .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--stale); animation: pulse-dot 1.2s ease-in-out infinite; }
+.act { padding: 8px 14px; border-top: 1px solid var(--grid); cursor: pointer; }
+.act:hover { background: var(--surface-2); }
+.act .t1 { font-weight: 600; font-size: 13px; }
+.act .t2 { color: var(--ink-2); font-size: 12px; }
+.ustat { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; padding: 1px 6px; border-radius: 4px;
+  background: var(--surface-2); color: var(--ink-2); margin: 3px 4px 0 0; white-space: nowrap; }
+.ustat i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.ustat.s-en-route i { background: var(--c-traffic); }
+.ustat.s-on-scene i { background: var(--stale); }
+.ustat.s-transporting i, .ustat.s-at-hospital i { background: var(--c-medical); }
+.ustat.s-cleared i { background: var(--c-rescue); }
+.tl { font-size: 13px; display: grid; grid-template-columns: 70px 1fr; gap: 2px 10px; }
+.tl .when { color: var(--muted); font-variant-numeric: tabular-nums; }
 .day-sep { position: sticky; top: 0; z-index: 1; background: var(--surface-2); color: var(--ink-2); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: 4px 14px; border-bottom: 1px solid var(--grid); }
 .pulse { border-radius: 50%; animation: pulse 1.6s ease-out infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--stale) 70%, transparent); } 100% { box-shadow: 0 0 0 18px transparent; } }
@@ -282,6 +301,7 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 <main>
   <section class="view on" id="mapView">
     <aside class="feed">
+      <div id="active"></div>
       <div class="feed-head"><span>Incidents</span><span class="num" id="feedCount">0</span></div>
       <div class="feed-list" id="feed"><div class="empty">Loading…</div></div>
     </aside>
@@ -609,6 +629,9 @@ async function openIncident(id, fly) {
       <p>${esc(t.transcript || "")}</p>
       ${t.transcript_raw && t.transcript_raw !== t.transcript ? `<details class="raw"><summary>As first heard (before name fixes)</summary>${esc(t.transcript_raw)}</details>` : ""}
       <audio controls preload="none" src="api/audio/${encodeURIComponent(t.id)}"></audio></div>`).join("")}
+    ${(i.timeline || []).length ? `<div class="tx"><div class="h">Units</div><div class="tl">${i.timeline.map(ev =>
+      `<span class="when">${new Date(ev.time_ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+       <span>${esc(ev.unit)} · ${esc(ev.status)}</span>`).join("")}</div></div>` : ""}
     ${i.history && i.history.length ? `<div class="tx"><div class="h">Previous incidents at this address</div>
       ${i.history.map(h => `<div style="font-size:13px;display:flex;gap:8px;align-items:center;padding:2px 0;cursor:pointer" data-hist="${h.id}">
         <span class="sw" style="width:8px;height:8px;border-radius:50%;background:${catColor(h.category)}"></span>${esc(h.nature)}
@@ -1049,8 +1072,31 @@ async function loadStatus() {
   } catch { document.getElementById("statusPill").className = "pill stale"; document.getElementById("statusText").textContent = "Server unreachable"; }
 }
 
+// "Active now": open calls and where every unit is (from radio status reports)
+const STATUS_ORDER = ["on scene", "transporting", "at hospital", "en route", "dispatched", "cleared", "out of service"];
+async function loadActive() {
+  const el = document.getElementById("active");
+  let list = [];
+  try { list = await fetch("api/active").then(r => r.json()); } catch { return; }
+  if (!list.length) { el.innerHTML = ""; return; }
+  const ago = ms => { const m = Math.max(0, Math.round((Date.now() - ms) / 60000)); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}`; };
+  el.innerHTML = `<div class="act-head"><span class="dot"></span>Active now · ${list.length}</div>` + list.map(i => {
+    const units = [...i.units].sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status));
+    return `<div class="act" data-id="${i.id}">
+      <div class="t1"><span class="sw" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${catColor(i.category)};margin-right:6px"></span>${esc(i.nature)}
+        <span style="color:var(--muted);font-weight:400"> · ${ago(i.first_ms)}</span></div>
+      <div class="t2">${esc(i.matched || i.address || i.place || "Location unknown")}</div>
+      <div>${units.map(u => `<span class="ustat s-${u.status.replace(/ /g, "-")}" title="${esc(u.status)} ${ago(u.since_ms)} ago"><i></i>${esc(u.unit)} · ${esc(u.status)}</span>`).join("")}</div>
+    </div>`;
+  }).join("");
+}
+document.getElementById("active").addEventListener("click", e => {
+  const it = e.target.closest("[data-id]"); if (it) openIncident(+it.dataset.id, true);
+});
+
 async function refresh() {
   renderActiveFilters();
+  loadActive();
   document.getElementById("csvBtn").href = `api/export.csv?${qs()}`;
   try {
     if (view === "mapView") {

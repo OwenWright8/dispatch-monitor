@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from . import config, corrections, db, departments, extract, openmhz, settings, transcribe
+from . import config, corrections, db, departments, extract, openmhz, settings, transcribe, units
 from .geo import Geocoder, GeoResult, Hints, _dist_m, in_county, learn_key, parse_cross_streets, parse_grid
 from .taxonomy import category_for
 
@@ -439,6 +439,7 @@ def handle_transcript(tx, transcript: str, use_llm: bool = True) -> tuple[dict, 
     inc = attach(tx["time_ms"], fields["departments"], fields, geo, method)
     if inc:
         learn_place(inc)
+    units.record(tx, transcript, fields, inc)
     return fields, method, inc
 
 
@@ -632,6 +633,7 @@ def housekeeping() -> dict:
                 pass
 
     done["transmissions"] = c.execute("DELETE FROM transmissions WHERE time_ms < ?", (detail_cut,)).rowcount
+    c.execute("DELETE FROM unit_events WHERE time_ms < ?", (detail_cut,))
     done["details"] = c.execute(
         "UPDATE incidents SET summary=NULL, patient_age=NULL, patient_sex=NULL, units='[]' WHERE last_ms < ? "
         "AND (summary IS NOT NULL OR patient_age IS NOT NULL OR patient_sex IS NOT NULL OR units <> '[]')",
@@ -730,6 +732,7 @@ def reprocess(use_llm: bool = True):
         log.info("No stored transcripts to reprocess")
         return
     c.execute("DELETE FROM incidents WHERE last_ms >= ?", (oldest,))
+    c.execute("DELETE FROM unit_events WHERE time_ms >= ?", (oldest,))     # rebuilt with the incidents
     c.execute("DELETE FROM geocache")      # geocoder may have improved since these were cached
     c.execute("UPDATE transmissions SET incident_id=NULL")
     rows = c.execute("SELECT * FROM transmissions WHERE status='done' AND transcript IS NOT NULL "

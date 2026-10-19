@@ -26,7 +26,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, corrections, db, openmhz, pipeline, settings, transcribe
+from . import config, corrections, db, openmhz, pipeline, settings, transcribe, units
 from .taxonomy import CATEGORIES, TAXONOMY
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -167,6 +167,12 @@ async def correct_incident(inc_id: int, req: Request):
     return {"changed": changed, "incident": incident(inc_id)}
 
 
+@app.get("/api/active")
+def active():
+    """Open incidents with every unit's latest status (dispatched / en route / on scene / ...)."""
+    return units.active()
+
+
 @app.get("/api/stations")
 def stations():
     """Fire stations for the map layer."""
@@ -252,6 +258,7 @@ def incident(inc_id: int):
     d["transmissions"] = [dict(t) for t in c.execute(
         "SELECT id, agency, talkgroup, time_ms, len_s, transcript, transcript_raw FROM transmissions WHERE incident_id=? "
         "ORDER BY time_ms", (inc_id,)).fetchall()]
+    d["timeline"] = units.timeline(inc_id)
     if d["matched"]:
         d["history"] = [dict(r) for r in c.execute(
             "SELECT id, first_ms, nature, category FROM incidents WHERE matched=? AND id<>? "

@@ -72,6 +72,12 @@ CREATE TABLE IF NOT EXISTS corrections (
     id INTEGER PRIMARY KEY AUTOINCREMENT, tx_ids TEXT NOT NULL, field TEXT NOT NULL, value TEXT,
     transcript TEXT, extracted TEXT, created_ms INTEGER
 );
+-- Unit status reports ("Engine 41 is on scene") matched to incidents (units.py)
+CREATE TABLE IF NOT EXISTS unit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, tx_id TEXT, time_ms INTEGER NOT NULL, unit TEXT, number TEXT,
+    status TEXT NOT NULL, incident_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS unit_events_inc ON unit_events(incident_id, time_ms);
 CREATE TABLE IF NOT EXISTS word_fixes (heard TEXT PRIMARY KEY, actual TEXT NOT NULL, created_ms INTEGER);
 -- Unit numbers a correction showed belong to a department ("Battalion 304" -> Carmel Fire)
 CREATE TABLE IF NOT EXISTS unit_owners (number TEXT PRIMARY KEY, dept TEXT NOT NULL, created_ms INTEGER);
