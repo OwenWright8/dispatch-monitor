@@ -3,6 +3,7 @@
     python -m dispatch                 poll + transcribe + serve dashboard (default)
     python -m dispatch reprocess       rebuild incidents from stored transcripts
     python -m dispatch reprocess --rules   ...without the LLM
+    python -m dispatch retranscribe [--hours 168]   speech-to-text again, then reprocess
     python -m dispatch prefetch --out DIR  download models/data into DIR (Docker build)
 """
 
@@ -15,7 +16,8 @@ from . import config, db, pipeline
 
 def main():
     ap = argparse.ArgumentParser(prog="dispatch")
-    ap.add_argument("command", nargs="?", default="run", choices=["run", "reprocess", "prefetch"])
+    ap.add_argument("command", nargs="?", default="run", choices=["run", "reprocess", "retranscribe", "prefetch"])
+    ap.add_argument("--hours", type=float, default=168, help="retranscribe: how far back (default 7 days)")
     ap.add_argument("--out", default="/opt/bundle", help="prefetch: output directory")
     ap.add_argument("--rules", action="store_true", help="reprocess with keyword rules only")
     ap.add_argument("--no-web", action="store_true", help="run the pipeline without the HTTP server")
@@ -36,6 +38,9 @@ def main():
 
     if args.command == "reprocess":
         pipeline.reprocess(use_llm=not args.rules)
+        return
+    if args.command == "retranscribe":
+        pipeline.retranscribe(args.hours)
         return
 
     log.info(f"County: {config.PROFILE.name}, {config.PROFILE.state} (OpenMHz system {config.OPENMHZ_SYSTEM})")

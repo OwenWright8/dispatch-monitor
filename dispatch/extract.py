@@ -212,13 +212,37 @@ _AT_PLACE = re.compile(r"\b(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|boul
 _NOT_A_PLACE = re.compile(r"(?:unit|apartment|apt|room|number|lot|suite|scene|the scene|this time|time)\b", re.I)
 
 
+def address_readings(transcript: str) -> list[str]:
+    """Every distinct numbered address read out, most-repeated first (later wins ties).
+
+    Dispatchers read the address twice; Whisper sometimes hears the two readings
+    differently ("1455 James Dean Drive" ... "1465 James Dean Drive", "11th West
+    Main" ... "1111 West Main")."""
+    found: dict[str, list[int]] = {}
+    for rx in ADDRESS_RES[:3]:
+        pos = 0
+        while (m := rx.search(transcript or "", pos)) is not None:
+            pos = m.start() + len(m.group(1).split()[0])
+            if _UNIT_BEFORE.search(transcript[:m.start()]):
+                continue
+            a = " ".join(m.group(1).split())
+            key = a.lower()
+            if not any(key == k.lower() for k in found):
+                found[a] = []
+            found[next(k for k in found if k.lower() == key)].append(m.start())
+    return sorted(found, key=lambda a: (-len(found[a]), -max(found[a])))
+
+
 def rules_extract(transcript: str) -> dict:
     out = dict(EMPTY)
     text = transcript or ""
     for rx in ADDRESS_RES:
-        for m in rx.finditer(text):
-            # "Medic 355 101 West Main Street": 355 is the unit, not the house number
+        pos = 0
+        while (m := rx.search(text, pos)) is not None:
+            # "Medic 355 101 West Main Street": 355 is the unit, not the house number;
+            # look again just after it so "101 West Main Street" is still found
             if _UNIT_BEFORE.search(text[:m.start()]):
+                pos = m.start() + len(m.group(1).split()[0])
                 continue
             out["address"] = " ".join(m.group(1).split())
             break

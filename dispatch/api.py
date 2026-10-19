@@ -26,7 +26,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, corrections, db, openmhz, pipeline, settings, transcribe
+from . import config, corrections, db, openmhz, pipeline, settings, transcribe, units
 from .taxonomy import CATEGORIES, TAXONOMY
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -133,6 +133,7 @@ def status():
         "whisper_model": "speech-to-text server" if settings.get("WHISPER_URL") and transcribe.remote_status["ok"] is not False else settings.get("WHISPER_MODEL"),
         "whisper_server": transcribe.remote_status,
         "backfill": s["backfill"],
+        "retranscribe": s["retranscribe"],
         "now": time.time(),
     }
 
@@ -164,6 +165,18 @@ async def correct_incident(inc_id: int, req: Request):
     except (ValueError, TypeError) as e:
         raise HTTPException(400, str(e))
     return {"changed": changed, "incident": incident(inc_id)}
+
+
+@app.get("/api/active")
+def active():
+    """Open incidents with every unit's latest status (dispatched / en route / on scene / ...)."""
+    return units.active()
+
+
+@app.get("/api/stations")
+def stations():
+    """Fire stations for the map layer."""
+    return pipeline.all_stations()
 
 
 @app.get("/api/learned")
@@ -211,6 +224,13 @@ def ollama_models():
         return {"ok": False, "error": str(e)[:200], "models": []}
 
 
+@app.post("/api/retranscribe")
+def start_retranscribe(req: Request, hours: float = Query(168, gt=0, le=24 * 31)):
+    """Run recent clips through speech-to-text again (e.g. the GPU server), then rebuild incidents."""
+    _require_admin(req)
+    return {"started": pipeline.start_retranscribe(hours), "retranscribe": pipeline.status["retranscribe"]}
+
+
 @app.post("/api/backfill")
 def backfill(hours: float = Query(24, gt=0, le=24 * 31)):
     """Fetch and process past calls. Live calls keep priority over the backfill."""
@@ -238,6 +258,7 @@ def incident(inc_id: int):
     d["transmissions"] = [dict(t) for t in c.execute(
         "SELECT id, agency, talkgroup, time_ms, len_s, transcript, transcript_raw FROM transmissions WHERE incident_id=? "
         "ORDER BY time_ms", (inc_id,)).fetchall()]
+    d["timeline"] = units.timeline(inc_id)
     if d["matched"]:
         d["history"] = [dict(r) for r in c.execute(
             "SELECT id, first_ms, nature, category FROM incidents WHERE matched=? AND id<>? "

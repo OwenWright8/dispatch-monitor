@@ -107,6 +107,10 @@ main { flex: 1; min-height: 0; display: flex; }
 #map { position: absolute; inset: 0; background: var(--surface-2); }
 .map-ctl { position: absolute; top: 10px; right: 10px; z-index: 500; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 .map-ctl .seg { background: var(--surface); box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+.map-toggle { background: var(--surface); box-shadow: 0 1px 4px rgba(0,0,0,.15); border-radius: 7px; padding: 4px 9px; }
+.station-icon { width: 22px; height: 22px; border-radius: 5px; background: var(--c-fire); color: #fff; font: 700 10px/22px var(--sans);
+  text-align: center; box-shadow: 0 0 0 2px var(--surface), 0 1px 4px rgba(0,0,0,.35); }
+.station-icon.ems { background: var(--c-medical); }
 .legend { background: var(--surface); border-radius: 8px; padding: 8px 10px; box-shadow: 0 1px 4px rgba(0,0,0,.15); font-size: 12px; display: grid; gap: 3px; }
 .legend div { display: flex; align-items: center; gap: 6px; color: var(--ink-2); }
 .legend .sw { width: 9px; height: 9px; border-radius: 50%; }
@@ -210,6 +214,25 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .item .body .depts { white-space: normal; }
 .new-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; color: var(--surface); background: var(--stale); border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: 1px; }
 .item.fresh { background: color-mix(in srgb, var(--stale) 6%, transparent); }
+/* active incidents */
+#active { border-bottom: 1px solid var(--grid); max-height: 45vh; overflow-y: auto; }
+#active:empty { display: none; }
+.act-head { padding: 8px 14px; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--stale); display: flex; gap: 6px; align-items: center; }
+.act-head .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--stale); animation: pulse-dot 1.2s ease-in-out infinite; }
+.act { padding: 8px 14px; border-top: 1px solid var(--grid); cursor: pointer; }
+.act:hover { background: var(--surface-2); }
+.act .t1 { font-weight: 600; font-size: 13px; }
+.act .t2 { color: var(--ink-2); font-size: 12px; }
+.ustat { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; padding: 1px 6px; border-radius: 4px;
+  background: var(--surface-2); color: var(--ink-2); margin: 3px 4px 0 0; white-space: nowrap; }
+.ustat i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.ustat.s-en-route i { background: var(--c-traffic); }
+.ustat.s-on-scene i { background: var(--stale); }
+.ustat.s-transporting i, .ustat.s-at-hospital i { background: var(--c-medical); }
+.ustat.s-cleared i { background: var(--c-rescue); }
+.tl { font-size: 13px; display: grid; grid-template-columns: 70px 1fr; gap: 2px 10px; }
+.tl .when { color: var(--muted); font-variant-numeric: tabular-nums; }
 .day-sep { position: sticky; top: 0; z-index: 1; background: var(--surface-2); color: var(--ink-2); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: 4px 14px; border-bottom: 1px solid var(--grid); }
 .pulse { border-radius: 50%; animation: pulse 1.6s ease-out infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--stale) 70%, transparent); } 100% { box-shadow: 0 0 0 18px transparent; } }
@@ -278,6 +301,7 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 <main>
   <section class="view on" id="mapView">
     <aside class="feed">
+      <div id="active"></div>
       <div class="feed-head"><span>Incidents</span><span class="num" id="feedCount">0</span></div>
       <div class="feed-list" id="feed"><div class="empty">Loading…</div></div>
     </aside>
@@ -285,6 +309,7 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
       <div id="map"></div>
       <div class="map-ctl">
         <div class="seg" id="modeSeg"><button data-mode="dots" class="on">Incidents</button><button data-mode="heat">Heatmap</button></div>
+        <label class="toggle map-toggle"><input type="checkbox" id="stationsToggle"> Fire stations</label>
         <div class="legend" id="mapLegend"></div>
       </div>
     </div>
@@ -467,6 +492,29 @@ document.getElementById("modeSeg").addEventListener("click", e => {
 });
 map.on("moveend", () => { if (F.bbox) refresh(); });
 
+// Fire stations layer (with their station numbers), remembered between visits
+const stationLayer = L.layerGroup();
+let stationsLoaded = false;
+async function showStations(on) {
+  store.set("stations", on);
+  if (!on) { map.removeLayer(stationLayer); return; }
+  if (!stationsLoaded) {
+    const list = await fetch("api/stations").then(r => r.json()).catch(() => []);
+    for (const s of list) {
+      const icon = L.divIcon({ className: "", iconSize: [22, 22], iconAnchor: [11, 11],
+        html: `<div class="station-icon ${DEPT_KIND[s.dept] === "ems" ? "ems" : ""}">${esc(s.number || "FD")}</div>` });
+      const m = L.marker([s.lat, s.lon], { icon, keyboard: false, zIndexOffset: -1000 });
+      const tip = `<b>${esc(s.label)}</b>${s.dept ? `<div class="m">${esc(s.dept)}</div>` : ""}${s.address ? `<div class="m">${esc(s.address)}</div>` : ""}`;
+      m.on("mouseover", ev => showTip(ev.originalEvent, tip));
+      m.on("mouseout", hideTip);
+      stationLayer.addLayer(m);
+    }
+    stationsLoaded = true;
+  }
+  stationLayer.addTo(map);
+}
+document.getElementById("stationsToggle").addEventListener("change", e => showStations(e.target.checked));
+
 function renderMap() {
   if (heat) { map.removeLayer(heat); heat = null; }
   dots.clearLayers();
@@ -581,6 +629,9 @@ async function openIncident(id, fly) {
       <p>${esc(t.transcript || "")}</p>
       ${t.transcript_raw && t.transcript_raw !== t.transcript ? `<details class="raw"><summary>As first heard (before name fixes)</summary>${esc(t.transcript_raw)}</details>` : ""}
       <audio controls preload="none" src="api/audio/${encodeURIComponent(t.id)}"></audio></div>`).join("")}
+    ${(i.timeline || []).length ? `<div class="tx"><div class="h">Units</div><div class="tl">${i.timeline.map(ev =>
+      `<span class="when">${new Date(ev.time_ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+       <span>${esc(ev.unit)} · ${esc(ev.status)}</span>`).join("")}</div></div>` : ""}
     ${i.history && i.history.length ? `<div class="tx"><div class="h">Previous incidents at this address</div>
       ${i.history.map(h => `<div style="font-size:13px;display:flex;gap:8px;align-items:center;padding:2px 0;cursor:pointer" data-hist="${h.id}">
         <span class="sw" style="width:8px;height:8px;border-radius:50%;background:${catColor(h.category)}"></span>${esc(h.nature)}
@@ -731,6 +782,15 @@ async function openSettings(msg = "", err = false) {
       ${st.help || st.changed ? `<div class="help">${esc(st.help)}${st.changed ? ` <button class="reset" data-reset="${st.key}">Reset to default (${esc(st.kind === "channels" ? "all" : st.default === "" ? "empty" : String(st.default))})</button>` : ""}</div>` : ""}
     </div>`;
   }
+  const st = await fetch("api/status").then(r => r.json()).catch(() => ({}));
+  const rt = st.retranscribe || {};
+  html += `<div class="set-group">Re-transcribe</div>
+    <div class="set-row"><label class="name">Run recent calls through speech-to-text again</label>
+      <div><select id="rtHours"><option value="24">Last 24 h</option><option value="72">Last 3 days</option>
+        <option value="168" selected>Last 7 days</option></select>
+        <button class="btn" id="rtStart" ${rt.running ? "disabled" : ""}>${rt.running ? `Working… ${rt.done}/${rt.total}` : "Start"}</button></div>
+      <div class="help">Useful after switching to a better speech-to-text server. Calls are rebuilt afterwards;
+        corrections are kept. ${rt.total && !rt.running ? `Last run: ${rt.changed} of ${rt.total} transcripts changed.` : ""}</div></div>`;
   const L = await fetch("api/learned").then(r => r.json()).catch(() => null);
   if (L) {
     html += `<div class="set-group">Learned from corrections</div>
@@ -790,6 +850,13 @@ document.getElementById("modalBody").addEventListener("click", e => {
   }
   const rs = e.target.closest("[data-reset]");
   if (rs) saveSettings({ [rs.dataset.reset]: null });
+  if (e.target.id === "rtStart") {
+    const pwEl = document.getElementById("adminPw");
+    if (pwEl) adminPw.set(pwEl.value);
+    fetch(`api/retranscribe?hours=${document.getElementById("rtHours").value}`, { method: "POST",
+      headers: { "X-Admin-Password": pwEl ? pwEl.value : adminPw.get() } })
+      .then(async r => openSettings(r.ok ? "Re-transcribing in the background." : (await r.json()).detail || `Error ${r.status}`, !r.ok));
+  }
   const fg = e.target.closest("[data-forget]");
   if (fg) forgetLearned(fg.dataset.forget, fg.dataset.key, fg.dataset.dept);
 });
@@ -1005,8 +1072,31 @@ async function loadStatus() {
   } catch { document.getElementById("statusPill").className = "pill stale"; document.getElementById("statusText").textContent = "Server unreachable"; }
 }
 
+// "Active now": open calls and where every unit is (from radio status reports)
+const STATUS_ORDER = ["on scene", "transporting", "at hospital", "en route", "dispatched", "cleared", "out of service"];
+async function loadActive() {
+  const el = document.getElementById("active");
+  let list = [];
+  try { list = await fetch("api/active").then(r => r.json()); } catch { return; }
+  if (!list.length) { el.innerHTML = ""; return; }
+  const ago = ms => { const m = Math.max(0, Math.round((Date.now() - ms) / 60000)); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}`; };
+  el.innerHTML = `<div class="act-head"><span class="dot"></span>Active now · ${list.length}</div>` + list.map(i => {
+    const units = [...i.units].sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status));
+    return `<div class="act" data-id="${i.id}">
+      <div class="t1"><span class="sw" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${catColor(i.category)};margin-right:6px"></span>${esc(i.nature)}
+        <span style="color:var(--muted);font-weight:400"> · ${ago(i.first_ms)}</span></div>
+      <div class="t2">${esc(i.matched || i.address || i.place || "Location unknown")}</div>
+      <div>${units.map(u => `<span class="ustat s-${u.status.replace(/ /g, "-")}" title="${esc(u.status)} ${ago(u.since_ms)} ago"><i></i>${esc(u.unit)} · ${esc(u.status)}</span>`).join("")}</div>
+    </div>`;
+  }).join("");
+}
+document.getElementById("active").addEventListener("click", e => {
+  const it = e.target.closest("[data-id]"); if (it) openIncident(+it.dataset.id, true);
+});
+
 async function refresh() {
   renderActiveFilters();
+  loadActive();
   document.getElementById("csvBtn").href = `api/export.csv?${qs()}`;
   try {
     if (view === "mapView") {
@@ -1049,6 +1139,7 @@ document.getElementById("bfBtn").addEventListener("click", async () => {
   } catch {}
   document.querySelectorAll("#rangeSeg button").forEach(x => x.classList.toggle("on", +x.dataset.days === F.days));
   document.querySelectorAll("#modeSeg button").forEach(x => x.classList.toggle("on", x.dataset.mode === mode));
+  if (store.get("stations", false)) { document.getElementById("stationsToggle").checked = true; showStations(true); }
   setBasemap();
   buildCatChips();
   if (location.hash === "#stats") { document.querySelector('[data-view="statsView"]').click(); }

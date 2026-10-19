@@ -153,6 +153,13 @@ class Hints:
     streets with the same name ("Main Street" is in Carmel, Arcadia, Sheridan…)."""
     anchors: list = field(default_factory=list)   # (lat, lon[, reach m]) of the dispatched departments' towns
     cross: list = field(default_factory=list)     # point lists of each cross street read out
+    grid: tuple | None = None                     # first-due station of the map-grid code read out ("55 George")
+
+    GRID_NEAR_M = 7_000      # a station's first-due area
+    GRID_FAR_M = 10_000      # beyond this the pin contradicts the grid code
+
+    def grid_dist(self, p) -> float:
+        return _dist_m(p, self.grid) if self.grid else 0.0
 
     def anchor_dist(self, p) -> float:
         return min((_dist_m(p, a[:2]) for a in self.anchors), default=0.0)
@@ -168,13 +175,32 @@ class Hints:
     def cross_dist(self, p) -> float:
         return sum(min(min(_dist_m(p, q) for q in pts), 5_000) for pts in self.cross) if self.cross else 0.0
 
-    def rank(self, p) -> tuple[float, float]:
-        """Lower is better: cross streets first (they pin the block), then the department's town."""
-        return (round(self.cross_dist(p) / 150), self.anchor_dist(p))
+    def rank(self, p) -> tuple[float, float, float]:
+        """Lower is better: cross streets first (they pin the block), then the grid code's
+        station area, then the department's town."""
+        return (round(self.cross_dist(p) / 150), round(self.grid_dist(p) / 2_000), self.anchor_dist(p))
 
     @property
     def near(self):
         return tuple(self.anchors[0][:2]) if self.anchors else None
+
+
+# Map-grid code read after the cross streets: first-due station + box letter
+# ("55 George", "Quarter 72, John", "Quadrant 42, Boy", "61st Frank").
+_PHONETIC = ("adam|adams|boy|charles|charlie|david|edward|frank|george|henry|ida|john|king|lincoln|mary|nora|"
+             "ocean|paul|queen|robert|sam|tom|union|victor|william|young|zebra")
+_GRID_RE = re.compile(r"(?<![\w])(?:(?:quarter|quadrant|grid|box|map)\s*,?\s*)?(\d{2})(?:st|nd|rd|th)?,?\s+(" + _PHONETIC
+                      + r")\b", re.I)
+_GRID_NOT_AFTER = re.compile(r"(?:engine|ladder|truck|medic|squad|rescue|tanker|battalion|unit|ambulance|utility|"
+                             r"room|apartment|apt|suite|number|no\.?)\s*$", re.I)
+
+
+def parse_grid(text: str) -> tuple[str, str] | None:
+    """('55', 'G') for "... 55 George, tone time 0805", else None."""
+    for m in _GRID_RE.finditer(text or ""):
+        if not _GRID_NOT_AFTER.search(text[:m.start()]):
+            return m.group(1), m.group(2)[0].upper()
+    return None
 
 
 # "cross of Stone Harbor Drive and Big Circle Drive", "Cross Off West 8th Street and West 9th Street"
@@ -773,17 +799,21 @@ class Geocoder:
                              (key, json.dumps(res.to_dict()) if res else None))
 
     def geocode(self, address: str | None, place: str | None, city_hint: str = "",
-                anchors=(), cross=(), fresh: bool = False, known: "GeoResult | None" = None) -> GeoResult | None:
-        """anchors: (lat, lon) of the dispatched departments' towns; cross: cross-street names."""
+                anchors=(), cross=(), fresh: bool = False, known: "GeoResult | None" = None,
+                grid=None) -> GeoResult | None:
+        """anchors: (lat, lon) of the dispatched departments' towns; cross: cross-street names;
+        grid: (lat, lon) of the first-due station of the map-grid code read out."""
         anchors = list(anchors) or [c for c in [CITY_CENTERS.get((city_hint or "").lower())] if c]
         cross = [c for c in cross if c]
         key = (f"{(address or '').lower()}|{(place or '').lower()}|{(city_hint or '').lower()}|"
                + ";".join(f"{a[0]:.3f},{a[1]:.3f}" + (f"/{a[2]:.0f}" if len(a) > 2 and a[2] else "") for a in anchors) + "|" + ";".join(c.lower() for c in cross)
-               + (f"|known:{known.lat:.4f},{known.lon:.4f}" if known else ""))
+               + (f"|known:{known.lat:.4f},{known.lon:.4f}" if known else "")
+               + (f"|grid:{grid[0]:.3f},{grid[1]:.3f}" if grid else ""))
         hit, cached = self._cached(key)
         if hit and not (fresh and (cached is None or cached.confidence in ("approximate", "doubtful", ""))):
             return cached
-        hints = Hints(anchors, [p for p in (self.tiger.points(c) if self.tiger else [] for c in cross) if p])
+        hints = Hints(anchors, [p for p in (self.tiger.points(c) if self.tiger else [] for c in cross) if p],
+                      tuple(grid[:2]) if grid else None)
         res = self._geocode(address, place, city_hint or config.PROFILE.name, hints, cross)
         if res and res.precision == "street" and not self._plausible(res, hints):
             res = None      # a fuzzy street match outside the department's area: better unmapped than wrong
@@ -821,7 +851,9 @@ class Geocoder:
                 return "confirmed"           # a cross street read out is right there
             if nearest > 1_500:
                 return "doubtful"            # none of them is anywhere near
-        if not hints.within_reach(p, self.DISTRICT_M):
+        if hints.grid and hints.grid_dist(p) > hints.GRID_FAR_M:
+            return "doubtful"                # nowhere near the station area the dispatcher read out
+        if not hints.grid and not hints.within_reach(p, self.DISTRICT_M):
             return "doubtful"                # far from every department sent
         return "high"
 
@@ -832,6 +864,8 @@ class Geocoder:
         p = (r.lat, r.lon)
         if hints.cross and hints.cross_dist(p) < 800 * len(hints.cross):
             return True                       # the cross streets read out are right there
+        if hints.grid:
+            return hints.grid_dist(p) <= hints.GRID_NEAR_M     # inside the first-due area read out
         if hints.cross and hints.anchors:
             return hints.within_reach(p, self.DISTRICT_M) and hints.cross_dist(p) < 2_500 * len(hints.cross)
         return hints.within_reach(p, self.DISTRICT_M)

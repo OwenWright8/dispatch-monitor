@@ -20,8 +20,8 @@ import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from . import config, corrections, db, departments, extract, openmhz, settings, transcribe
-from .geo import Geocoder, GeoResult, Hints, _dist_m, learn_key, parse_cross_streets
+from . import config, corrections, db, departments, extract, openmhz, settings, transcribe, units
+from .geo import Geocoder, GeoResult, Hints, _dist_m, in_county, learn_key, parse_cross_streets, parse_grid
 from .taxonomy import category_for
 
 log = logging.getLogger(__name__)
@@ -33,6 +33,7 @@ status = {
     "llm_ok": None, "llm_error": None,
     "last_processed": None, "started": time.time(),
     "backfill": {"running": False, "hours": 0, "queued": 0, "error": None},
+    "retranscribe": {"running": False, "hours": 0, "done": 0, "total": 0, "changed": 0, "error": None},
 }
 
 _geocoder: Geocoder | None = None
@@ -127,6 +128,71 @@ def backfill(hours: float, _locked: bool = False) -> int:
     finally:
         b["running"] = False
         _backfill_lock.release()
+
+
+_retranscribe_lock = threading.Lock()
+
+
+def retranscribe(hours: float, rebuild: bool = True) -> int:
+    """Run the last `hours` of transcribed clips through speech-to-text again (e.g. after
+    switching to a GPU speech-to-text server) and, if anything changed, rebuild the
+    incidents. Audio comes from the saved clip, else from OpenMHz. Returns clips changed."""
+    st = status["retranscribe"]
+    hours = min(hours, settings.get("DETAIL_RETENTION_DAYS") * 24)
+    c = db.conn()
+    since = int((time.time() - hours * 3600) * 1000)
+    rows = c.execute("SELECT id, url, audio_path, transcript_raw, transcript FROM transmissions "
+                     "WHERE status='done' AND time_ms >= ? ORDER BY time_ms DESC", (since,)).fetchall()
+    st.update(running=True, hours=hours, done=0, total=len(rows), changed=0, error=None)
+    log.info(f"Re-transcribing {len(rows)} clips from the last {hours:g} h")
+    try:
+        for tx in rows:
+            path, tmp = tx["audio_path"], None
+            try:
+                if not (path and os.path.exists(path)):
+                    fd, tmp = tempfile.mkstemp(suffix=".m4a")
+                    os.close(fd)
+                    with open(tmp, "wb") as f:
+                        f.write(openmhz.download(tx["url"]))
+                    path = tmp
+                    time.sleep(1.0)              # be polite to OpenMHz
+                raw = transcribe.transcribe(path)
+            except Exception as e:
+                log.debug(f"Re-transcribe {tx['id']} skipped: {e}")
+                st["done"] += 1
+                continue
+            finally:
+                if tmp and os.path.exists(tmp):
+                    os.unlink(tmp)
+            if raw and raw != (tx["transcript_raw"] or tx["transcript"]):
+                c.execute("UPDATE transmissions SET transcript_raw=?, transcript=? WHERE id=?",
+                          (raw, departments.normalize(raw), tx["id"]))
+                st["changed"] += 1
+            st["done"] += 1
+        log.info(f"Re-transcribed {st['done']} clips, {st['changed']} changed")
+        if rebuild and st["changed"]:
+            reprocess()
+        return st["changed"]
+    except Exception as e:
+        st["error"] = str(e)[:300]
+        log.error(f"Re-transcribe failed: {e}")
+        return st["changed"]
+    finally:
+        st["running"] = False
+
+
+def start_retranscribe(hours: float) -> bool:
+    if not _retranscribe_lock.acquire(blocking=False):
+        return False
+
+    def run():
+        try:
+            retranscribe(hours)
+        finally:
+            _retranscribe_lock.release()
+    status["retranscribe"]["running"] = True
+    threading.Thread(target=run, name="retranscribe", daemon=True).start()
+    return True
 
 
 def start_backfill(hours: float) -> bool:
@@ -349,6 +415,7 @@ def handle_transcript(tx, transcript: str, use_llm: bool = True) -> tuple[dict, 
     fields, method = _extract(transcript) if use_llm else extract.extract(transcript, use_llm=False)
     fields["departments"] = departments.detect(transcript, fields.get("units"), ch) or [ch.agency if ch else tx["agency"]]
     fields["cross_streets"] = parse_cross_streets(transcript)
+    fields["grid"], grid = grid_station(transcript)
     geo = None
     if fields["is_dispatch"] and (fields["address"] or fields["place"]):
         town, anchors = _department_towns(fields["departments"])
@@ -357,11 +424,74 @@ def handle_transcript(tx, transcript: str, use_llm: bool = True) -> tuple[dict, 
             anchors = [c for c in [config.PROFILE.city_centers.get(ch.city_hint.lower())] if c]
         known = known_place(fields["place"], fields["departments"], fields["address"])
         geo = geocoder().geocode(fields["address"], fields["place"], city, anchors, fields["cross_streets"],
-                                 known=known)
+                                 known=known, grid=grid)
+        # The address is read out twice; if Whisper heard the readings differently, try
+        # each and keep the one that places best ("1455" vs "1465 James Dean Drive").
+        readings = [a for a in extract.address_readings(transcript)
+                    if a.lower() != (fields["address"] or "").lower()]
+        if readings and not (geo and geo.precision == "address" and geo.confidence == "confirmed"):
+            for alt in readings[:3]:
+                g = geocoder().geocode(alt, fields["place"], city, anchors, fields["cross_streets"],
+                                       known=known_place(fields["place"], fields["departments"], alt), grid=grid)
+                if g and (geo is None or _better_location(g, _as_row(geo), fields["departments"])):
+                    geo, fields["address"] = g, alt
+        fields["address_readings"] = readings
     inc = attach(tx["time_ms"], fields["departments"], fields, geo, method)
     if inc:
         learn_place(inc)
+    units.record(tx, transcript, fields, inc)
     return fields, method, inc
+
+
+_stations: dict | None = None
+
+
+def station_point(number: str):
+    """Location of fire station `number` (the first-due station of a grid code):
+    the county profile's list first, then "Fire Station 55" / "Station No. 81" in the map data."""
+    global _stations
+    if number in config.PROFILE.stations:
+        s = config.PROFILE.stations[number]
+        return (s.lat, s.lon)
+    if _stations is None:
+        found: dict[str, list] = {}
+        for name, lat, lon, _ in geocoder().places.places:
+            m = re.search(r"\bstation\s*(?:no\.?|#)?\s*(\d{2})\b", name, re.I)
+            if m and "fire" in name.lower() and in_county(lat, lon):
+                found.setdefault(m.group(1), []).append((lat, lon))
+        _stations = {k: (sum(p[0] for p in v) / len(v), sum(p[1] for p in v) / len(v)) for k, v in found.items()}
+    return _stations.get(number)
+
+
+def all_stations() -> list[dict]:
+    """Fire stations for the map: the county profile's list, plus fire stations the map
+    data names that aren't already listed (department guessed from the name)."""
+    out = [{"number": n, "lat": s.lat, "lon": s.lon, "dept": s.dept, "label": s.label, "address": s.address}
+           for n, s in config.PROFILE.stations.items()]
+    for name, lat, lon, _ in geocoder().places.places:
+        low = name.lower()
+        if "fire" not in low or not any(w in low for w in ("station", "department")) \
+                or "museum" in low or not in_county(lat, lon):
+            continue
+        if any(_dist_m((lat, lon), (s["lat"], s["lon"])) < 400 for s in out):
+            continue                              # same building as a listed station
+        dept = next((d.name for d in config.PROFILE.departments
+                     if any(w in low for w in {d.name.lower().replace(" fire", ""),
+                                               (d.spoken or "").lower().replace(" fire", "")} if len(w) > 3)), "")
+        if config.PROFILE.stations and not dept:
+            continue                              # the county's own list is complete; skip neighbours' stations
+        m = re.search(r"\bstation\s*(?:no\.?|#)?\s*(\d{1,3})\b", name, re.I)
+        out.append({"number": m.group(1) if m else "", "lat": lat, "lon": lon, "dept": dept, "label": name,
+                    "address": ""})
+    return out
+
+
+def grid_station(transcript: str):
+    """(code, station location) for the map-grid code read out, e.g. ("55 G", (40.17, -86.02))."""
+    if not config.PROFILE.grid_codes:
+        return None, None
+    g = parse_grid(transcript)
+    return (f"{g[0]} {g[1]}", station_point(g[0])) if g else (None, None)
 
 
 def known_place(place: str | None, depts: list[str], address: str | None = None) -> GeoResult | None:
@@ -503,6 +633,7 @@ def housekeeping() -> dict:
                 pass
 
     done["transmissions"] = c.execute("DELETE FROM transmissions WHERE time_ms < ?", (detail_cut,)).rowcount
+    c.execute("DELETE FROM unit_events WHERE time_ms < ?", (detail_cut,))
     done["details"] = c.execute(
         "UPDATE incidents SET summary=NULL, patient_age=NULL, patient_sex=NULL, units='[]' WHERE last_ms < ? "
         "AND (summary IS NOT NULL OR patient_age IS NOT NULL OR patient_sex IS NOT NULL OR units <> '[]')",
@@ -553,15 +684,18 @@ def retry_locations(limit: int = 40) -> int:
         c.execute("UPDATE incidents SET geo_tries = geo_tries + 1 WHERE id=?", (row["id"],))
         agencies = json.loads(row["agencies"])
         town, anchors = _department_towns(agencies)
-        cands, cross = [], []
+        cands, cross, grid = [], [], None
         for tx in c.execute("SELECT talkgroup, transcript, extracted FROM transmissions WHERE incident_id=? "
                             "ORDER BY time_ms", (row["id"],)).fetchall():
             f = json.loads(tx["extracted"] or "{}")
             rules = extract.rules_extract(tx["transcript"] or "")
-            for a, p in ((f.get("address"), f.get("place")), (rules["address"], rules["place"] or f.get("place"))):
+            place = rules["place"] or f.get("place")
+            for a, p in [(f.get("address"), f.get("place")), (rules["address"], place)] + [
+                    (alt, place) for alt in extract.address_readings(tx["transcript"] or "")]:
                 if (a or p) and (a, p) not in cands:
                     cands.append((a, p))
             cross += [x for x in f.get("cross_streets") or [] if x not in cross]
+            grid = grid or grid_station(tx["transcript"] or "")[1]
             ch = config.CHANNELS.get(tx["talkgroup"])
             if not anchors and ch:
                 anchors = [x for x in [config.PROFILE.city_centers.get(ch.city_hint.lower())] if x]
@@ -569,7 +703,7 @@ def retry_locations(limit: int = 40) -> int:
         best = None
         for a, p in cands:
             geo = geocoder().geocode(a, p, town or config.PROFILE.name, anchors, cross, fresh=True,
-                                     known=known_place(p, agencies, a))
+                                     known=known_place(p, agencies, a), grid=grid)
             if geo and (best is None or _better_location(geo, _as_row(best), agencies)):
                 best = geo
         if best and _better_location(best, row, agencies):
@@ -598,6 +732,7 @@ def reprocess(use_llm: bool = True):
         log.info("No stored transcripts to reprocess")
         return
     c.execute("DELETE FROM incidents WHERE last_ms >= ?", (oldest,))
+    c.execute("DELETE FROM unit_events WHERE time_ms >= ?", (oldest,))     # rebuilt with the incidents
     c.execute("DELETE FROM geocache")      # geocoder may have improved since these were cached
     c.execute("UPDATE transmissions SET incident_id=NULL")
     rows = c.execute("SELECT * FROM transmissions WHERE status='done' AND transcript IS NOT NULL "
