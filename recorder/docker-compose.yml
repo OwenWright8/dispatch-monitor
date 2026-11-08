@@ -1,0 +1,15 @@
+# trunk-recorder for a Raspberry Pi 4 + Airspy R2, sending dispatch calls to
+# Dispatch Monitor's /api/call-upload. See README.md in this folder.
+services:
+  trunk-recorder:
+    image: robotastic/trunk-recorder:latest
+    restart: unless-stopped
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./talkgroups.csv:/app/talkgroups.csv:ro
+      - ./media:/app/media
+    devices:
+      - /dev/bus/usb:/dev/bus/usb      # the Airspy
+    shm_size: 256m                     # tempDir=/dev/shm holds calls while they're recorded
+    logging:
+      options: { max-size: "10m", max-file: "3" }   # keep the SD card from filling with logs

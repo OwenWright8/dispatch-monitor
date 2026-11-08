@@ -1,0 +1,41 @@
+{
+  "ver": 2,
+  "logLevel": "info",
+  "captureDir": "/app/media",
+  "tempDir": "/dev/shm",
+  "sources": [{
+    "driver": "osmosdr",
+    "device": "airspy=0",
+    "center": 854400000,
+    "rate": 10000000,
+    "error": 0,
+    "gain": 10,
+    "lnaGain": 10,
+    "mixGain": 8,
+    "ifGain": 8,
+    "digitalRecorders": 4,
+    "analogRecorders": 0
+  }],
+  "systems": [{
+    "shortName": "tippco",
+    "type": "p25",
+    "modulation": "qpsk",
+    "control_channels": [851050000, 853837500, 857737500],
+    "talkgroupsFile": "talkgroups.csv",
+    "recordUnknown": false,
+    "hideUnknownTalkgroups": true,
+    "compressWav": true,
+    "audioArchive": false,
+    "callLog": false
+  }],
+  "plugins": [{
+    "name": "rdioscanner_uploader",
+    "library": "librdioscanner_uploader.so",
+    "server": "http://DISPATCH_MONITOR_HOST:8086",
+    "systems": [{
+      "shortName": "tippco",
+      "systemId": 1,
+      "apiKey": "PASTE_UPLOAD_API_KEY_HERE"
+    }]
+  }]
+}

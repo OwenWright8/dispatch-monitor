@@ -75,6 +75,11 @@ OPENMHZ_SYSTEM = _env("OPENMHZ_SYSTEM", PROFILE.openmhz_system)
 OPENMHZ_API = _env("OPENMHZ_API", "https://api.openmhz.com")
 CHANNELS = (_parse_channels(os.environ["CHANNELS"]) if os.environ.get("CHANNELS", "").strip()
             else {c.talkgroup: _from_spec(c) for c in PROFILE.channels})
+# Pull calls from OpenMHz. Turn off when every call arrives through /api/call-upload.
+OPENMHZ_ENABLED = _bool("OPENMHZ_ENABLED", True)
+# Key a recorder (trunk-recorder / SDRTrunk, Rdio Scanner format) must send to
+# POST /api/call-upload. Empty = uploads are refused. Environment only: never shown in the dashboard.
+UPLOAD_API_KEY = _env("UPLOAD_API_KEY", "").strip()
 POLL_INTERVAL_S = int(_env("POLL_INTERVAL_S", "30"))   # gentle on OpenMHz; gaps are filled by paging back
 BACKFILL_HOURS = float(_env("BACKFILL_HOURS", "24"))   # history to pull on first start
 MIN_CALL_SECONDS = int(_env("MIN_CALL_SECONDS", "4"))  # shorter clips are acks/keyups

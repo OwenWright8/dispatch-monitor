@@ -18,9 +18,10 @@ import tempfile
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import config, corrections, db, departments, extract, openmhz, settings, transcribe, units
+from . import config, corrections, db, departments, extract, ingest, openmhz, settings, transcribe, units
 from .geo import Geocoder, GeoResult, Hints, _dist_m, in_county, learn_key, parse_cross_streets, parse_grid
 from .taxonomy import category_for
 
@@ -44,6 +45,18 @@ def geocoder() -> Geocoder:
     if _geocoder is None:
         _geocoder = Geocoder(db.conn)
     return _geocoder
+
+
+def fetch_audio(url: str) -> bytes:
+    """A clip's audio: from disk for uploaded calls (ingest.py), else from OpenMHz."""
+    if ingest.is_local(url):
+        return ingest.local_path(url).read_bytes()
+    return openmhz.download(url)
+
+
+def _suffix(url: str | None) -> str:
+    suf = Path(url).suffix.lower() if ingest.is_local(url) else ""
+    return suf if suf in (".wav", ".mp3", ".m4a") else ".m4a"
 
 
 # ─────────────────────────────────────────────
@@ -150,12 +163,13 @@ def retranscribe(hours: float, rebuild: bool = True) -> int:
             path, tmp = tx["audio_path"], None
             try:
                 if not (path and os.path.exists(path)):
-                    fd, tmp = tempfile.mkstemp(suffix=".m4a")
+                    fd, tmp = tempfile.mkstemp(suffix=_suffix(tx["url"]))
                     os.close(fd)
                     with open(tmp, "wb") as f:
-                        f.write(openmhz.download(tx["url"]))
+                        f.write(fetch_audio(tx["url"]))
                     path = tmp
-                    time.sleep(1.0)              # be polite to OpenMHz
+                    if not ingest.is_local(tx["url"]):
+                        time.sleep(1.0)          # be polite to OpenMHz
                 raw = transcribe.transcribe(path)
             except Exception as e:
                 log.debug(f"Re-transcribe {tx['id']} skipped: {e}")
@@ -214,6 +228,13 @@ def poller_loop(stop: threading.Event):
     last_backfill_retry = 0.0
     failures = 0
     while True:
+        if not settings.get("OPENMHZ_ENABLED"):
+            # Calls arrive through /api/call-upload only; check the switch again shortly.
+            status.update(poll_failures=0, last_poll_error=None, next_poll=None)
+            failures = 0
+            if stop.wait(10):
+                return
+            continue
         try:
             poll_once()
             if failures:
@@ -407,7 +428,7 @@ def _archive_path(tx) -> str:
     d = _local(tx["time_ms"])
     p = config.AUDIO_DIR / d.strftime("%Y/%m/%d")
     p.mkdir(parents=True, exist_ok=True)
-    return str(p / f"{tx['talkgroup']}-{tx['id']}.m4a")
+    return str(p / f"{tx['talkgroup']}-{tx['id']}{_suffix(tx['url'])}")
 
 
 def handle_transcript(tx, transcript: str, use_llm: bool = True) -> tuple[dict, str, int | None]:
@@ -552,11 +573,11 @@ def _department_towns(names: list[str]) -> tuple[str | None, list]:
 
 def process(tx):
     c = db.conn()
-    fd, tmp = tempfile.mkstemp(suffix=".m4a")
+    fd, tmp = tempfile.mkstemp(suffix=_suffix(tx["url"]))
     os.close(fd)
     try:
         with open(tmp, "wb") as f:
-            f.write(openmhz.download(tx["url"]))
+            f.write(fetch_audio(tx["url"]))
         raw = transcribe.transcribe(tmp)
         transcript = departments.normalize(raw)
         fields, method, inc = handle_transcript(tx, transcript)
@@ -574,6 +595,7 @@ def process(tx):
             log.info(f"[{', '.join(json.loads(r['agencies']))}] incident #{inc}: {r['nature']} @ "
                      f"{r['matched'] or r['address'] or r['place']} ({r['precision'] or 'not mapped'})")
         status["last_processed"] = time.time()
+        ingest.cleanup(tx["url"])                  # an uploaded clip is archived above if it's kept
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -627,7 +649,7 @@ def housekeeping() -> dict:
         done["audio"] += 1
     # Clips no row points at any more (e.g. from before this ran), by file age
     if config.AUDIO_DIR.exists():
-        for f in config.AUDIO_DIR.rglob("*.m4a"):
+        for f in (f for ext in ("*.m4a", "*.wav", "*.mp3") for f in config.AUDIO_DIR.rglob(ext)):
             try:
                 if f.stat().st_mtime * 1000 < audio_cut:
                     f.unlink()

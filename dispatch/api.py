@@ -26,7 +26,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, corrections, db, openmhz, pipeline, settings, transcribe, units
+from . import config, corrections, db, ingest, openmhz, pipeline, settings, transcribe, units
 from .taxonomy import CATEGORIES, PRIORITY, TAXONOMY
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -131,6 +131,8 @@ def status():
         "last_poll": s["last_poll"], "last_poll_error": s["last_poll_error"],
         "poll_failures": s["poll_failures"], "next_poll": s["next_poll"], "feed_identity": openmhz.identity(),
         "last_processed": s["last_processed"],
+        "openmhz_enabled": settings.get("OPENMHZ_ENABLED"),
+        "upload": {"enabled": bool(config.UPLOAD_API_KEY), **ingest.status},
         "llm": {"enabled": settings.get("LLM_ENABLED"), "model": settings.get("OLLAMA_MODEL"), "ok": s["llm_ok"], "error": s["llm_error"]},
         "whisper_model": "speech-to-text server" if settings.get("WHISPER_URL") and transcribe.remote_status["ok"] is not False else settings.get("WHISPER_MODEL"),
         "whisper_server": transcribe.remote_status,
@@ -326,9 +328,48 @@ def audio(tx_id: str):
     row = db.conn().execute("SELECT url, audio_path FROM transmissions WHERE id=?", (tx_id,)).fetchone()
     if not row:
         raise HTTPException(404)
-    if row["audio_path"] and Path(row["audio_path"]).exists():
-        return FileResponse(row["audio_path"], media_type="audio/mp4")
+    for path in (row["audio_path"], ingest.local_path(row["url"]) if ingest.is_local(row["url"]) else None):
+        if path and Path(path).exists():
+            return FileResponse(path, media_type=_AUDIO_TYPES.get(Path(path).suffix.lower(), "audio/mp4"))
+    if ingest.is_local(row["url"]):
+        raise HTTPException(404, "Audio clip not kept")
     try:   # not archived: proxy from OpenMHz (browsers get the Cloudflare challenge)
         return Response(openmhz.download(row["url"]), media_type="audio/mp4")
     except Exception:
         raise HTTPException(502, "Audio no longer available from OpenMHz")
+
+
+_AUDIO_TYPES = {".m4a": "audio/mp4", ".wav": "audio/wav", ".mp3": "audio/mpeg"}
+
+
+@app.post("/api/call-upload")
+async def call_upload(req: Request):
+    """Rdio Scanner-compatible call upload, for trunk-recorder's rdioscanner_uploader plugin
+    (server = http://<this app>, apiKey = UPLOAD_API_KEY) or SDRTrunk's Rdio Scanner streaming.
+    Multipart fields used: key, talkgroup, dateTime (unix s), audio (file), audioName, audioType."""
+    if not config.UPLOAD_API_KEY:
+        raise HTTPException(403, "Uploads are off: set UPLOAD_API_KEY")
+    form = await req.form()
+    if not hmac.compare_digest(str(form.get("key") or ""), config.UPLOAD_API_KEY):
+        raise HTTPException(401, "Invalid API key")
+    audio = form.get("audio")
+    if audio is None or isinstance(audio, str):
+        # Rdio Scanner clients first send a "test" request with no audio
+        if str(form.get("test") or "") == "1":
+            return Response("incomplete call data: no talkgroup", media_type="text/plain")
+        raise HTTPException(400, "No audio file")
+    try:
+        tg = int(str(form.get("talkgroup") or "").strip())
+        t_ms = ingest.parse_time_ms(str(form.get("dateTime") or ""))
+    except ValueError:
+        raise HTTPException(400, "Bad talkgroup or dateTime")
+    data = await audio.read()
+    if not data:
+        raise HTTPException(400, "Empty audio file")
+    result, tx_id = ingest.accept(talkgroup=tg, time_ms=t_ms, audio=data,
+                                  audio_type=str(form.get("audioType") or audio.content_type or ""),
+                                  audio_name=str(form.get("audioName") or audio.filename or ""),
+                                  system=str(form.get("system") or ""))
+    # Any 2xx tells the recorder not to resend; talkgroups we don't monitor are simply dropped.
+    return Response(f"Call {result}." if result != "queued" else "Call imported successfully.",
+                    media_type="text/plain")

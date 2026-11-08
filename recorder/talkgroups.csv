@@ -1,0 +1,6 @@
+Decimal,Hex,Mode,Alpha Tag,Description,Tag,Category,Priority
+1827,723,D,TCFD DISPATCH,County fire dispatch,Fire Dispatch,County Fire,1
+1833,729,D,TEAS DISPATCH,TEAS EMS dispatch,EMS Dispatch,EMS,1
+1901,76d,D,LFD DISPATCH,Lafayette FD dispatch,Fire Dispatch,Lafayette Fire,1
+2021,7e5,D,WLFD DISPATCH,West Lafayette FD dispatch,Fire Dispatch,West Lafayette Fire,1
+2105,839,D,PUFD DISPATCH,Purdue FD dispatch,Fire Dispatch,Purdue Fire,1
