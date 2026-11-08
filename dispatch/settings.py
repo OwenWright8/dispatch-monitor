@@ -48,6 +48,8 @@ SPECS: tuple[Spec, ...] = (
          "Higher = slightly more accurate, slower.", min=1, max=10),
     Spec("ENABLED_CHANNELS", "Channels to monitor", "Radio feed", "channels",
          ",".join(str(t) for t in config.CHANNELS), "Untick a channel to stop transcribing it."),
+    Spec("OPENMHZ_ENABLED", "Pull calls from OpenMHz", "Radio feed", "bool", config.OPENMHZ_ENABLED,
+         "Off = only calls sent by your own recorder (trunk-recorder / SDRTrunk) to /api/call-upload."),
     Spec("POLL_INTERVAL_S", "Check for new calls every (s)", "Radio feed", "int", config.POLL_INTERVAL_S,
          min=10, max=600),
     Spec("MIN_CALL_SECONDS", "Skip clips shorter than (s)", "Radio feed", "int", config.MIN_CALL_SECONDS,

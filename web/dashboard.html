@@ -1351,7 +1351,10 @@ addEventListener("resize", () => { if (lastStats && view === "statsView") render
 async function loadStatus() {
   try {
     const s = await fetch("api/status").then(r => r.json());
-    const fresh = s.last_poll && s.now - s.last_poll < 120 && !s.last_poll_error;
+    // Live if OpenMHz answered recently, or a recorder is uploading calls (/api/call-upload)
+    const up = s.upload || {};
+    const uploading = up.enabled && (!s.openmhz_enabled || (up.last_upload && s.now - up.last_upload < 1800));
+    const fresh = uploading || (s.last_poll && s.now - s.last_poll < 120 && !s.last_poll_error);
     // The feed heals itself (new session / browser identity, backoff); say so instead of a dead-end error.
     const retryIn = s.next_poll ? Math.max(0, Math.round(s.next_poll - s.now)) : null;
     const healing = !fresh && s.last_poll_error;

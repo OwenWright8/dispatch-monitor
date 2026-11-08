@@ -4,5 +4,6 @@ curl_cffi>=0.11
 requests>=2.31
 pyshp>=2.3
 fastapi>=0.115
+python-multipart>=0.0.9   # /api/call-upload (multipart form)
 uvicorn>=0.30
 tzdata

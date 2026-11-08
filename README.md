@@ -23,7 +23,8 @@ and set `COUNTY=` to its file name. Run two counties side by side as two stacks 
 ## How it works
 
 ```
-OpenMHz API ──(curl_cffi, gets past Cloudflare)──► transmissions table (work queue)
+OpenMHz API ──(curl_cffi)──────────────────┐
+your recorder ──(POST /api/call-upload)────┴─► transmissions table (work queue)
                                                          │ newest first
                                     faster-whisper small.en (speech → text)
                                                          │
@@ -205,6 +206,8 @@ in the dashboard:
 | `WHISPER_URL` ⚙ | empty | a [whisper-asr-webservice](https://github.com/ahmetoner/whisper-asr-webservice) on a GPU (e.g. `large-v3`); the built-in model takes over if it's down |
 | `WHISPER_MODEL` ⚙ | `small.en` | `base.en` / `small.en` / `medium.en` |
 | `BACKFILL_HOURS` | `24` | history to load in the background on first start; `0` = live only. More can be loaded from the dashboard. |
+| `OPENMHZ_ENABLED` ⚙ | `true` | pull calls from OpenMHz; `false` when your own recorder sends every call (below) |
+| `UPLOAD_API_KEY` | empty | key a recorder must send to `/api/call-upload`; empty = uploads refused. Never shown in the dashboard |
 | `CHANNELS` | the county profile's | `talkgroup:label:city-hint,…`; a label naming a department credits it |
 | `AUDIO_RETENTION_HOURS` ⚙ | `24` | delete audio clips after this |
 | `DETAIL_RETENTION_DAYS` ⚙ | `7` | delete transcripts, summaries, patient info and units after this |
@@ -214,6 +217,36 @@ in the dashboard:
 | `WEB_PORT` | `8086` | host port |
 | `ADMIN_PASSWORD` | empty | required to save settings in the dashboard when set |
 | `CARTO_API_KEY` ⚙ | empty | [CARTO basemaps](https://carto.com/basemaps) key for the dark/light map style; empty = OpenStreetMap tiles |
+
+## Your own recorder (no OpenMHz)
+
+OpenMHz sits behind Cloudflare, and when it asks for a human check the feed stops. The app can
+instead take calls straight from a recorder: `POST /api/call-upload` accepts the
+[Rdio Scanner](https://github.com/chuot/rdio-scanner) upload format, which
+[trunk-recorder](https://github.com/robotastic/trunk-recorder) and [SDRTrunk](https://github.com/DSheirer/sdrtrunk)
+both send. Uploaded calls go through the same speech-to-text, AI and mapping as OpenMHz calls.
+
+1. Pick a long random key and put it in `.env`: `UPLOAD_API_KEY=...` (and `OPENMHZ_ENABLED=false` once
+   the recorder carries everything). Restart the stack.
+2. Point the recorder at the app.
+   - **trunk-recorder** (Linux/Mac/Pi, with an SDR such as an RTL-SDR dongle): add the uploader plugin
+     to `config.json`. Control channels and talkgroups for the county are on
+     [RadioReference](https://www.radioreference.com/db/sid/313).
+     ```json
+     "plugins": [{
+       "name": "rdioscanner_uploader",
+       "library": "librdioscanner_uploader.so",
+       "server": "http://<this machine>:8086",
+       "systems": [{ "shortName": "tippco", "systemId": 1, "apiKey": "<UPLOAD_API_KEY>",
+                     "talkgroupAllow": ["1827", "1833", "1901", "2021", "2105"] }]
+     }]
+     ```
+   - **SDRTrunk** (runs on Windows): *Streaming → Rdio Scanner*, host `http://<this machine>:8086`,
+     API key = `UPLOAD_API_KEY`, system ID 1, then add that stream to the dispatch talkgroups' alias.
+   - **Someone already recording the county** (whoever feeds OpenMHz or Broadcastify Calls) can add
+     this app as one more upload target in the same way, without changing their existing feeds.
+3. The dashboard header shows **Live** while uploads arrive; `/api/status` → `upload` shows the count
+   and time of the last one. Calls on talkgroups the app doesn't monitor are accepted and dropped.
 
 ## Maintenance
 
