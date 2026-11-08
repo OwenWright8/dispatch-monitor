@@ -228,7 +228,8 @@ both send. Uploaded calls go through the same speech-to-text, AI and mapping as 
 
 1. Pick a long random key and put it in `.env`: `UPLOAD_API_KEY=...` (and `OPENMHZ_ENABLED=false` once
    the recorder carries everything). Restart the stack.
-2. Point the recorder at the app.
+2. Point the recorder at the app. A ready-made Raspberry Pi 4 + Airspy R2 setup is in
+   [`recorder/`](recorder/README.md).
    - **trunk-recorder** (Linux/Mac/Pi, with an SDR such as an RTL-SDR dongle): add the uploader plugin
      to `config.json`. Control channels and talkgroups for the county are on
      [RadioReference](https://www.radioreference.com/db/sid/313).
