@@ -72,10 +72,25 @@ INCIDENT_RETENTION_DAYS = int(_env("INCIDENT_RETENTION_DAYS", "365"))
 BUNDLE_DIR = Path(_env("BUNDLE_DIR", "/opt/bundle"))
 
 OPENMHZ_SYSTEM = _env("OPENMHZ_SYSTEM", PROFILE.openmhz_system)
+# Base URL. Point this at a dedicated origin hostname if the OpenMHz operator
+# gives you one (that host is not behind the browser challenge).
 OPENMHZ_API = _env("OPENMHZ_API", "https://api.openmhz.com")
+# Authorized access, issued by the OpenMHz operator, instead of impersonating a
+# browser: a Cloudflare Access service token, a bearer token, or both. When any
+# of these is set the client identifies as this app and sends the credential.
+OPENMHZ_ACCESS_CLIENT_ID = _env("OPENMHZ_ACCESS_CLIENT_ID", "").strip()
+OPENMHZ_ACCESS_CLIENT_SECRET = _env("OPENMHZ_ACCESS_CLIENT_SECRET", "").strip()
+OPENMHZ_TOKEN = _env("OPENMHZ_TOKEN", "").strip()
 CHANNELS = (_parse_channels(os.environ["CHANNELS"]) if os.environ.get("CHANNELS", "").strip()
             else {c.talkgroup: _from_spec(c) for c in PROFILE.channels})
 POLL_INTERVAL_S = int(_env("POLL_INTERVAL_S", "30"))   # gentle on OpenMHz; gaps are filled by paging back
+# Quiet feed: stretch the poll interval towards this instead of fetching the same
+# page every interval forever. Activity resets it to POLL_INTERVAL_S.
+POLL_IDLE_MAX_S = int(_env("POLL_IDLE_MAX_S", "300"))
+# A gap (after an outage or a challenge cool-down) is walked back at most this
+# many pages per poll, so catching up never turns into a request burst.
+POLL_CATCHUP_PAGES = int(_env("POLL_CATCHUP_PAGES", "5"))
+PAGE_DELAY_S = float(_env("PAGE_DELAY_S", "1.0"))      # pause between older() pages
 BACKFILL_HOURS = float(_env("BACKFILL_HOURS", "24"))   # history to pull on first start
 MIN_CALL_SECONDS = int(_env("MIN_CALL_SECONDS", "4"))  # shorter clips are acks/keyups
 
