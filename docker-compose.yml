@@ -9,9 +9,17 @@ services:
     environment:
       - DB_PATH=/app/data/dispatch.db
       - CALLS_JSON=/app/data/calls.json
+      - LOG_PATH=/app/data/poller.log
+      - PYTHONUNBUFFERED=1
       - OLLAMA_URL=http://host.docker.internal:11434/api/generate
     extra_hosts:
       - "host.docker.internal:host-gateway"   # lets container reach host Ollama
+    healthcheck:   # unhealthy if the poll loop stops writing its heartbeat
+      test: ["CMD", "python", "-c", "import json,datetime as d;h=json.load(open('/app/data/status.json'))['heartbeat'];exit((d.datetime.now(d.timezone.utc)-d.datetime.fromisoformat(h)).total_seconds()>1200)"]
+      interval: 2m
+      timeout: 10s
+      start_period: 5m
+      retries: 3
 
   web:
     image: nginx:alpine

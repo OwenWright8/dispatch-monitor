@@ -15,3 +15,12 @@ Then open http://localhost:8086/dashboard.html
 ```bash
 git pull && docker compose up -d --build
 ```
+
+## Troubleshooting
+- **Status pill says "RECORDED" / "FEED OFFLINE"**: the poller can't reach OpenMHz.
+  Hover the pill for the reason, or check `data/status.json` / `data/poller.log`.
+  Since late 2026 the OpenMHz API sits behind a Cloudflare bot challenge (HTTP 403),
+  so polling needs access approved by OpenMHz. The dashboard keeps showing the last captured data.
+- **Re-run extraction on stored calls** (e.g. after changing the prompt/model):
+  `DB_PATH=data/dispatch.db CALLS_JSON=data/calls.json python poller.py --reextract`
+- After editing `dashboard.html`, run `docker compose restart web` (single-file bind mount).

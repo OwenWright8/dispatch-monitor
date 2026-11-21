@@ -25,9 +25,7 @@ import hashlib
 import logging
 import tempfile
 import argparse
-import schedule
 import requests
-import whisper
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 from datetime import datetime, timezone
@@ -44,7 +42,7 @@ WHISPER_MODEL    = "base.en"         # tiny.en / base.en / small.en / medium.en
 
 # ── Ollama config ──────────────────────────────────────────────────────────
 OLLAMA_URL       = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
-OLLAMA_MODEL     = "llama3.2"        # or: mistral, llama3.1, gemma2, phi3
+OLLAMA_MODEL     = os.environ.get("OLLAMA_MODEL", "llama3.2")  # or: mistral, llama3.1, gemma2, phi3
 #   Model recommendations for this task on Apple Silicon:
 #     llama3.2   (2GB)  — fast, good JSON, great for short transcripts
 #     mistral    (4GB)  — slightly better address parsing, still quick
@@ -53,7 +51,8 @@ OLLAMA_MODEL     = "llama3.2"        # or: mistral, llama3.1, gemma2, phi3
 # ──────────────────────────────────────────────────────────────────────────
 
 CITY_CONTEXT     = "Lafayette, Indiana"
-GEOCODE_SUFFIX   = ", Lafayette, IN, USA"
+GEOCODE_SUFFIX   = ", Tippecanoe County, IN, USA"
+COUNTY_VIEWBOX   = [(40.57, -87.10), (40.21, -86.69)]  # NW, SE corners of Tippecanoe County
 
 # Talkgroups to track (fire/EMS/police dispatch channels)
 # Leave empty list [] to capture ALL talkgroups
@@ -62,9 +61,35 @@ TALKGROUP_FILTER = []  # e.g. ["LFD DISP", "LPD DISP", "TIPCO EMS"]
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(), logging.FileHandler("poller.log")],
+    handlers=[logging.StreamHandler(),
+              logging.FileHandler(os.environ.get("LOG_PATH", "poller.log"))],
 )
 log = logging.getLogger(__name__)
+
+# Status file the dashboard reads to show whether the live feed is healthy
+STATUS_JSON = os.environ.get(
+    "STATUS_JSON",
+    str(Path(os.environ.get("CALLS_JSON", "calls.json")).with_name("status.json")),
+)
+_status = {"feed_ok": None, "last_success": None, "last_error": None,
+           "last_error_at": None, "heartbeat": None}
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def _write_json_atomic(path: str, data):
+    """Write to a temp file then rename, so readers never see a half-written file."""
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)
+
+def write_status(**updates):
+    _status.update(updates, heartbeat=_now_iso())
+    try:
+        _write_json_atomic(STATUS_JSON, _status)
+    except OSError as e:
+        log.warning(f"Could not write status file: {e}")
 
 # ─────────────────────────────────────────────
 # DATABASE
@@ -116,23 +141,29 @@ def insert_call(data: dict):
 # ─────────────────────────────────────────────
 # OPENMHZ API
 # ─────────────────────────────────────────────
-def fetch_recent_calls(limit: int = 20, filter_time: int = None) -> list:
-    """Fetch most recent calls from Tippecanoe County feed."""
+class FeedError(Exception):
+    pass
+
+def fetch_recent_calls(limit: int = 20) -> list:
+    """Fetch most recent calls from Tippecanoe County feed. Raises FeedError on failure."""
     params = {"limit": limit}
-    if filter_time:
-        params["filter-time"] = filter_time
     if TALKGROUP_FILTER:
         params["filter-talkgroup"] = ",".join(TALKGROUP_FILTER)
 
+    url = f"{OPENMHZ_BASE}/{OPENMHZ_SYSTEM}/calls"
     try:
-        url = f"{OPENMHZ_BASE}/{OPENMHZ_SYSTEM}/calls"
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("calls", [])
+        resp = requests.get(url, params=params, timeout=15,
+                            headers={"User-Agent": "lafayette-dispatch-monitor/1.1"})
     except requests.RequestException as e:
-        log.error(f"OpenMHz API error: {e}")
-        return []
+        raise FeedError(f"network error: {e}") from e
+    if resp.status_code == 403 and "Just a moment" in resp.text:
+        raise FeedError("403 — OpenMHz API is behind a Cloudflare bot challenge")
+    if not resp.ok:
+        raise FeedError(f"HTTP {resp.status_code}")
+    try:
+        return resp.json().get("calls", [])
+    except ValueError as e:
+        raise FeedError("response was not JSON") from e
 
 def download_audio(url: str) -> str | None:
     """Download call audio to a temp file. Returns path or None."""
@@ -156,6 +187,7 @@ _whisper_model = None
 def get_whisper():
     global _whisper_model
     if _whisper_model is None:
+        import whisper  # heavy (torch); only load when actually transcribing
         log.info(f"Loading Whisper model: {WHISPER_MODEL} (first run, may take a moment)")
         _whisper_model = whisper.load_model(WHISPER_MODEL)
     return _whisper_model
@@ -194,10 +226,16 @@ Keys:
                 Assault, Disturbance, Shooting, Drug, Burglary, Suspicious,
                 Traffic Stop, Other — or null if unclear
 
-Example output:
-{"address": "1200 South 18th Street", "call_type": "Medical"}
+If no address is clearly stated, use null. Never guess or invent one.
+
+Example output format:
+{"address": "<street address or null>", "call_type": "<type or null>"}
 
 Transcript: {transcript}"""
+
+VALID_CALL_TYPES = {"Medical", "Fire", "Traffic Accident", "Welfare Check", "Theft",
+                    "Assault", "Disturbance", "Shooting", "Drug", "Burglary",
+                    "Suspicious", "Traffic Stop", "Other"}
 
 def _call_ollama(prompt: str) -> str:
     """Send a prompt to Ollama and return the response text."""
@@ -230,7 +268,8 @@ def extract_dispatch_info(transcript: str) -> dict:
 
     # ── Ollama for ambiguous / noisy transcripts ────────────────────────
     try:
-        prompt = EXTRACTION_PROMPT.format(transcript=transcript[:600])
+        # NOTE: don't use .format() — the prompt contains literal {...} JSON
+        prompt = EXTRACTION_PROMPT.replace("{transcript}", transcript[:600])
         raw = _call_ollama(prompt)
 
         # Strip accidental ```json fences some models add
@@ -242,6 +281,12 @@ def extract_dispatch_info(transcript: str) -> dict:
             raise ValueError(f"No JSON in response: {raw!r}")
 
         parsed = json.loads(json_match.group())
+        for k in ("address", "call_type"):
+            v = parsed.get(k)
+            if not isinstance(v, str) or v.strip().lower() in ("", "null", "none") or "<" in v:
+                parsed[k] = None
+        if parsed.get("call_type") not in VALID_CALL_TYPES:
+            parsed["call_type"] = regex_result["call_type"]
         parsed["confidence"] = "llm"
         return parsed
 
@@ -304,11 +349,8 @@ def geocode(address: str) -> tuple[float | None, float | None]:
         return None, None
     query = address + GEOCODE_SUFFIX
     try:
-        loc = _geocoder.geocode(query, timeout=5)
-        if loc:
-            return loc.latitude, loc.longitude
-        # Try without city suffix
-        loc = _geocoder.geocode(address, timeout=5)
+        # bounded=True: only accept results inside the county (no matches in Australia)
+        loc = _geocoder.geocode(query, timeout=5, viewbox=COUNTY_VIEWBOX, bounded=True)
         if loc:
             return loc.latitude, loc.longitude
     except GeocoderTimedOut:
@@ -316,6 +358,15 @@ def geocode(address: str) -> tuple[float | None, float | None]:
     except Exception as e:
         log.warning(f"Geocoding error for '{address}': {e}")
     return None, None
+
+# ─────────────────────────────────────────────
+def _looks_like_address(addr: str) -> bool:
+    """Reject LLM junk like 'Unknown', 'N/A', or a bare unit number."""
+    a = addr.strip().lower()
+    if len(a) < 5 or a in {"unknown", "none", "null", "n/a", "not specified",
+                           "lafayette", "west lafayette", "purdue", "tippecanoe county"}:
+        return False
+    return bool(re.search(r"[a-z]{3,}", a))
 
 # ─────────────────────────────────────────────
 # MAIN PIPELINE
@@ -385,23 +436,68 @@ def process_call(call: dict):
     })
     log.info(f"  Saved: {call_type} @ {address or 'unknown'} | units: {units_list} (confidence: {confidence})")
 
-_last_poll_time = None
-
-def poll_once():
-    global _last_poll_time
+def poll_once(limit: int = 25) -> int:
+    """Fetch + process new calls. Returns number processed. Raises FeedError."""
     log.info("Polling OpenMHz...")
-    calls = fetch_recent_calls(limit=25, filter_time=_last_poll_time)
-    if calls:
-        _last_poll_time = int(time.time() * 1000)
-        new_count = 0
-        for call in reversed(calls):  # oldest first
-            if not call_exists(call.get("id") or call.get("_id", "")):
-                process_call(call)
-                new_count += 1
-        if new_count:
-            log.info(f"Processed {new_count} new call(s).")
-        else:
-            log.info("No new calls.")
+    calls = fetch_recent_calls(limit=limit)
+    write_status(feed_ok=True, last_success=_now_iso())
+    new_count = 0
+    for call in reversed(calls):  # oldest first
+        if call_exists(call.get("id") or call.get("_id", "")):
+            continue
+        try:
+            process_call(call)
+            new_count += 1
+        except Exception:
+            # One bad call must never take the whole poller down
+            log.exception(f"Failed to process call {call.get('_id')}")
+    log.info(f"Processed {new_count} new call(s)." if new_count else "No new calls.")
+    return new_count
+
+def reextract_all():
+    """Re-run extraction + geocoding on transcripts already in the DB."""
+    con = sqlite3.connect(DB_PATH)
+    rows = con.execute("SELECT id, raw_transcript FROM calls WHERE raw_transcript != ''").fetchall()
+    log.info(f"Re-extracting {len(rows)} stored transcripts...")
+    for call_id, transcript in rows:
+        info = extract_dispatch_info(transcript)
+        address = info.get("address")
+        if address and not _looks_like_address(address):
+            address = None
+        lat, lon = geocode(address) if address else (None, None)
+        if address:
+            time.sleep(1)  # Nominatim usage policy: max 1 request/sec
+        con.execute("""UPDATE calls SET address=?, call_type=?, lat=?, lon=?, confidence=?
+                       WHERE id=?""",
+                    (address, info.get("call_type") or "Unknown", lat, lon,
+                     info.get("confidence", "none"), call_id))
+        con.commit()
+        log.info(f"  {call_id}: {info.get('call_type')} @ {address} → {lat}, {lon}")
+    con.close()
+
+def run_forever():
+    """Main loop: never exits on errors; backs off when the feed is failing."""
+    last_export = 0.0
+    backoff = POLL_INTERVAL_S
+    while True:
+        try:
+            poll_once()
+            backoff = POLL_INTERVAL_S
+        except FeedError as e:
+            backoff = min(backoff * 2, 15 * 60)  # up to 15 min between retries
+            log.error(f"Feed unavailable: {e} — retrying in {backoff}s")
+            write_status(feed_ok=False, last_error=str(e), last_error_at=_now_iso())
+        except Exception as e:
+            log.exception("Unexpected error in poll loop")
+            write_status(last_error=f"internal: {e}", last_error_at=_now_iso())
+        if time.time() - last_export > 120:
+            try:
+                export_json()
+                last_export = time.time()
+            except Exception:
+                log.exception("Export failed")
+        write_status()  # heartbeat
+        time.sleep(backoff)
 
 # ─────────────────────────────────────────────
 # SIMPLE JSON EXPORT (for dashboard)
@@ -428,8 +524,7 @@ def export_json(output: str = os.environ.get("CALLS_JSON", "calls.json"), limit:
         except Exception:
             d["units"] = []
         data.append(d)
-    with open(output, "w") as f:
-        json.dump(data, f, indent=2)
+    _write_json_atomic(output, data)
     log.info(f"Exported {len(data)} calls to {output}")
     return data
 
@@ -442,6 +537,8 @@ if __name__ == "__main__":
                         help="Pull last 100 calls before watching live")
     parser.add_argument("--export-only", action="store_true",
                         help="Just export calls.json and exit")
+    parser.add_argument("--reextract", action="store_true",
+                        help="Re-run address/call-type extraction on stored calls, export, and exit")
     args = parser.parse_args()
 
     init_db()
@@ -450,19 +547,18 @@ if __name__ == "__main__":
         export_json()
         sys.exit(0)
 
+    if args.reextract:
+        reextract_all()
+        export_json()
+        sys.exit(0)
+
     if args.backfill:
         log.info("Backfilling last 100 calls...")
-        calls = fetch_recent_calls(limit=100)
-        for call in reversed(calls):
-            process_call(call)
-        export_json()
+        try:
+            poll_once(limit=100)
+        except FeedError as e:
+            log.error(f"Backfill failed: {e}")
 
-    # Watch live
+    export_json()  # make sure the dashboard has data right away
     log.info(f"Starting live poll every {POLL_INTERVAL_S}s. Press Ctrl+C to stop.")
-    schedule.every(POLL_INTERVAL_S).seconds.do(poll_once)
-    schedule.every(2).minutes.do(lambda: export_json())  # refresh JSON for dashboard
-
-    poll_once()  # run immediately
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+    run_forever()
