@@ -30,6 +30,7 @@ PRECISION_RANK = {"address": 4, "intersection": 3, "place": 2, "street": 1, None
 
 status = {
     "last_poll": None, "last_poll_error": None, "poll_failures": 0, "next_poll": None,
+    "catchup": None,                       # {"target", "cursor"} while a gap is being walked back
     "llm_ok": None, "llm_error": None,
     "last_processed": None, "started": time.time(),
     "backfill": {"running": False, "hours": 0, "queued": 0, "error": None},
@@ -77,25 +78,75 @@ def _page_down(start_batch: list[dict], floor_ms: int, min_ms: int = 0, max_page
         oldest = min(openmhz.to_ms(c["time"]) for c in batch)
         if oldest <= floor_ms:
             break
-        time.sleep(1.0)          # be polite to a free community service
+        time.sleep(config.PAGE_DELAY_S)     # be polite to a free community service
         batch = openmhz.older(oldest)
         added += _insert(batch, min_ms)
     return added
 
 
-def poll_once():
+def _walk_older(cursor_ms: int, floor_ms: int, max_pages: int) -> tuple[int, int, bool]:
+    """Page back from cursor_ms towards floor_ms, at most max_pages requests.
+
+    Returns (added, cursor, reached_floor). The cursor is where the next poll
+    resumes, so a long gap costs a handful of requests per cycle instead of one
+    long burst against the API."""
+    added, cur = 0, cursor_ms
+    for _ in range(max_pages):
+        if cur <= floor_ms:
+            return added, cur, True
+        time.sleep(config.PAGE_DELAY_S)
+        batch = openmhz.older(cur)
+        if not batch:
+            return added, cur, True
+        added += _insert(batch)
+        oldest = min(openmhz.to_ms(c["time"]) for c in batch)
+        if oldest >= cur:                   # API returned nothing older; stop rather than loop
+            return added, cur, True
+        cur = oldest
+    return added, cur, cur <= floor_ms
+
+
+def poll_once() -> int:
+    """One poll: the newest page (every monitored talkgroup in one request), then
+    at most POLL_CATCHUP_PAGES pages of gap catch-up.
+
+    Returns how many transmissions were queued, so the poller can stretch its
+    interval when the feed is quiet."""
     c = db.conn()
     newest = c.execute("SELECT MAX(time_ms) FROM transmissions").fetchone()[0]
-    now_ms = int(time.time() * 1000)
-    if newest:
-        added = _page_down(openmhz.latest(), newest)      # fills any gap since the last poll
-    else:                                                 # fresh install: live only; history is backfill's job
-        recent = now_ms - 15 * 60_000
+    if newest is None:                      # fresh install: live only; history is backfill's job
+        recent = int(time.time() * 1000) - 15 * 60_000
         added = _insert(openmhz.latest(), min_ms=recent)
-    status["last_poll"] = time.time()
-    status["last_poll_error"] = None
+        status["catchup"] = None
+        status.update(last_poll=time.time(), last_poll_error=None)
+        if added:
+            log.info(f"Queued {added} new transmission(s)")
+        return added
+
+    batch = openmhz.latest()
+    added = _insert(batch)
+    cursor = min((openmhz.to_ms(x["time"]) for x in batch), default=newest)
+    # A gap is open when the oldest call in the newest page is newer than the
+    # newest call we already had (missed polls, a challenge cool-down, a restart).
+    # Resume from last poll's cursor so no page is fetched twice.
+    resume = status.get("catchup")
+    target = newest
+    if resume:
+        target = min(target, resume["target"])
+        cursor = min(cursor, resume["cursor"])
+    if cursor > target:
+        walked, cursor, done = _walk_older(cursor, target, config.POLL_CATCHUP_PAGES)
+        added += walked
+        status["catchup"] = None if done else {"target": target, "cursor": cursor}
+        if not done:
+            log.info(f"Filling a gap in the feed; about {round((cursor - target) / 60_000)} more "
+                     f"minute(s) to walk back")
+    else:
+        status["catchup"] = None
+    status.update(last_poll=time.time(), last_poll_error=None)
     if added:
         log.info(f"Queued {added} new transmission(s)")
+    return added
 
 
 _backfill_lock = threading.Lock()
@@ -206,6 +257,20 @@ def start_backfill(hours: float) -> bool:
     return True
 
 
+def _poll_delay(base_s: float, idle_max_s: float, quiet: int, failures: int, cooling_s: float) -> float:
+    """Seconds to wait before the next poll.
+
+    Failures back off exponentially. A quiet feed (nothing queued) stretches the
+    interval towards idle_max_s, so an idle install makes ~12 requests an hour
+    instead of ~120; new calls snap it back to base_s. A Cloudflare cool-down
+    always wins."""
+    if failures:
+        delay = min(base_s * 2 ** min(failures, 6), 300)
+    else:
+        delay = min(base_s * 1.5 ** min(quiet, 12), max(base_s, idle_max_s))
+    return max(delay, cooling_s + 1)
+
+
 def poller_loop(stop: threading.Event):
     """Polls for as long as the app runs. Failures never stop it: it backs off
     (up to 5 minutes), the OpenMHz client switches session and browser identity,
@@ -213,12 +278,14 @@ def poller_loop(stop: threading.Event):
     backfill_due = config.BACKFILL_HOURS > 0
     last_backfill_retry = 0.0
     failures = 0
+    quiet = 0
     while True:
         try:
-            poll_once()
+            added = poll_once()
             if failures:
                 log.info(f"Feed recovered after {failures} failed poll(s) (identity {openmhz.identity()})")
             failures = 0
+            quiet = 0 if added else quiet + 1        # nothing new: poll less often
             bf = status["backfill"]
             if backfill_due:
                 backfill_due = not start_backfill(config.BACKFILL_HOURS)   # in its own thread
@@ -228,12 +295,12 @@ def poller_loop(stop: threading.Event):
                 start_backfill(bf["hours"] or config.BACKFILL_HOURS)
         except Exception as e:
             failures += 1
+            quiet = 0
             status["last_poll_error"] = str(e)[:300]
             (log.warning if failures < 5 else log.error)(f"Poll failed ({failures} in a row): {e}")
         status["poll_failures"] = failures
-        interval = settings.get("POLL_INTERVAL_S")
-        delay = interval if not failures else min(interval * 2 ** min(failures, 6), 300)
-        delay = max(delay, openmhz.cooling_down() + 1)      # after a Cloudflare challenge, wait it out
+        delay = _poll_delay(settings.get("POLL_INTERVAL_S"), settings.get("POLL_IDLE_MAX_S"),
+                            quiet, failures, openmhz.cooling_down())
         status["next_poll"] = time.time() + delay
         if stop.wait(delay):
             return

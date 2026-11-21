@@ -205,6 +205,9 @@ in the dashboard:
 | `WHISPER_URL` ⚙ | empty | a [whisper-asr-webservice](https://github.com/ahmetoner/whisper-asr-webservice) on a GPU (e.g. `large-v3`); the built-in model takes over if it's down |
 | `WHISPER_MODEL` ⚙ | `small.en` | `base.en` / `small.en` / `medium.en` |
 | `BACKFILL_HOURS` | `24` | history to load in the background on first start; `0` = live only. More can be loaded from the dashboard. |
+| `POLL_IDLE_MAX_S` ⚙ | `300` | when nothing new arrives the poll interval stretches from `POLL_INTERVAL_S` up to this; a new call snaps it back |
+| `POLL_CATCHUP_PAGES` | `5` | pages of gap to walk back per poll after an outage, instead of one long burst |
+| `PAGE_DELAY_S` | `1.0` | pause between history pages |
 | `CHANNELS` | the county profile's | `talkgroup:label:city-hint,…`; a label naming a department credits it |
 | `AUDIO_RETENTION_HOURS` ⚙ | `24` | delete audio clips after this |
 | `DETAIL_RETENTION_DAYS` ⚙ | `7` | delete transcripts, summaries, patient info and units after this |
@@ -214,6 +217,11 @@ in the dashboard:
 | `WEB_PORT` | `8086` | host port |
 | `ADMIN_PASSWORD` | empty | required to save settings in the dashboard when set |
 | `CARTO_API_KEY` ⚙ | empty | [CARTO basemaps](https://carto.com/basemaps) key for the dark/light map style; empty = OpenStreetMap tiles |
+| `OPENMHZ_TOKEN` | empty | bearer token from the OpenMHz operator, if they allowlisted this install |
+| `OPENMHZ_ACCESS_CLIENT_ID` / `OPENMHZ_ACCESS_CLIENT_SECRET` | empty | Cloudflare Access service token from the OpenMHz operator (both must be set) |
+| `OPENMHZ_API` | `https://api.openmhz.com` | base URL; a dedicated origin hostname from the operator skips the browser challenge |
+| `OPENMHZ_SYSTEM` | from the county profile | OpenMHz system short name |
+| `USER_AGENT` | `<county>-dispatch-monitor/2.1 (self-hosted)` | sent as the OpenMHz user agent; put a contact address here so an allowlist can be traced back to you |
 
 ## Maintenance
 
@@ -227,9 +235,17 @@ docker compose exec app python -m dispatch reprocess
 
 ## Caveats
 
-- OpenMHz is a free community service behind Cloudflare. The app identifies as a browser via
-  `curl_cffi`, polls every 20 s, and pages history gently. If Cloudflare changes and polling fails, the
-  header shows **Feed error**. Updating `curl_cffi` usually fixes it.
+- OpenMHz is a free community service behind Cloudflare, and the challenge in front of it exists to
+  block scraping. The supported fix is an allowlist, not a better disguise: ask the operator
+  ([support@openmhz.com](mailto:support@openmhz.com)) for a Cloudflare Access service token, a bearer
+  token, or a dedicated origin hostname, then set `OPENMHZ_ACCESS_CLIENT_ID` + `_SECRET`,
+  `OPENMHZ_TOKEN`, or `OPENMHZ_API`. With one configured the app identifies as itself (see
+  `USER_AGENT`) and no browser identity is used. Without one it still impersonates a browser via
+  `curl_cffi`; if Cloudflare challenges it, the header shows **Feed error** and requests back off
+  exponentially instead of retrying. Request volume is kept low either way: one GET per poll covers
+  every monitored talkgroup, a quiet feed stretches from `POLL_INTERVAL_S` towards `POLL_IDLE_MAX_S`
+  (30 s → 5 min by default, ~12 requests an hour when idle instead of ~120), and a gap is walked back
+  `POLL_CATCHUP_PAGES` pages at a time instead of in one burst.
 - Radio transcription is imperfect. Expect a share of incidents with a misheard street or an
   "Other" call type. The detail view shows the transcript and audio so you can judge.
 - Whisper occasionally misses the start of a clip or invents words on very noisy audio.

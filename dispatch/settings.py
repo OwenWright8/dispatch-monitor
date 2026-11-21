@@ -50,6 +50,9 @@ SPECS: tuple[Spec, ...] = (
          ",".join(str(t) for t in config.CHANNELS), "Untick a channel to stop transcribing it."),
     Spec("POLL_INTERVAL_S", "Check for new calls every (s)", "Radio feed", "int", config.POLL_INTERVAL_S,
          min=10, max=600),
+    Spec("POLL_IDLE_MAX_S", "Slow down to (s) when quiet", "Radio feed", "int", config.POLL_IDLE_MAX_S,
+         "With nothing new arriving, the poll interval stretches out to this, so an idle install makes far "
+         "fewer requests. A new call snaps it back to the interval above.", min=30, max=1800),
     Spec("MIN_CALL_SECONDS", "Skip clips shorter than (s)", "Radio feed", "int", config.MIN_CALL_SECONDS,
          "Very short clips are acknowledgements and key-ups.", min=0, max=30),
     Spec("INCIDENT_WINDOW_MIN", "Merge transmissions within (min)", "Incidents", "int",
